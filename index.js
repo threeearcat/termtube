@@ -1,73 +1,35 @@
 const fs = require('fs');
-const ytdl = require('ytdl-core');
-const url = 'http://youtube.com/watch?v=34aQNMvGEZQ'
-var ffmpeg = require('fluent-ffmpeg');
-const decoder = require('lame').Decoder;
+const auth = require(__dirname + "/auth.js")
+const {google} = require('googleapis');
+const player = require('./player');
 
-var auth = require(__dirname + "/auth.js")
-var {google} = require('googleapis');
-
-function getLikes(auth) {
+/*
+ * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
+ * @param {function} callback A callback function.
+ */
+function getLikes(auth, callback) {
     var youtube = google.youtube('v3');
     var token = "";
 
     youtube.videos.list({
         auth: auth,
-        "part": "snippet,contentDetails,statistics",
+        "part": "id",
         "myRating": "like",
         pageToken: token,
     }).then(function(res) {
-        play(res.data.items[0].id);
-    },
-            function(err) { console.error("Execute error", err); });
-}
-
-/**
- *    id - Youtube video ID to play
- */
-function play(id) {
-    id = "s29fcv5E52Y";
-    const url = "https://www.youtube.com/watch?v=" + id;
-    console.log(url);
-
-    opt = {
-        videoFormat: 'mp4',
-        quality: 'lowest',
-        audioFormat: 'mp3',
-        filter (format) {
-            return format.container === opt.videoFormat && format.audioBitrate
+        if (res.data.nextPageToken.length != 0) {
+            token = res.data.nextPageToken;
         }
-    }
-    const video = ytdl(url, opt);
-
-    const Speaker = require('speaker');
-    // Create the Speaker instance
-    const speaker = new Speaker({
-        channels: 2,          // 2 channels
-        bitDepth: 16,         // 16-bit samples
-        sampleRate: 44100     // 44,100 Hz sample rate
-    });
-
-    // let writeStream = fs.createWriteStream('secret.flv');
-    convert(video, speaker);
-}
-
-/**
- *    input - input stream
- *    output - output stream
- */
-function convert(input, output) {
-    ffmpeg(input)
-        .on('error', function(e) {
-            console.log(e);
-        })
-        .format('mp3')
-        .pipe(decoder())
-        .pipe(output);
+        let ids = res.data.items.map(a => a.id);
+        console.log("Received IDs", ids);
+        callback(ids);
+    }).catch(function(err) { console.error("Execute error", err); });
 }
 
 function main() {
-    auth.authorize(getLikes);
+    var p = new player.player();
+    auth.authorize(function(auth) { getLikes(auth, p.add); });
+    p.start();
 }
 
 if (require.main === module) {
