@@ -1,0 +1,19 @@
+{
+  "name": "termtube",
+  "version": "1.0.0",
+  "description": "Streaming youtube videos (in background) from the liked playlist",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@dragon.kaist.ac.kr:termtube"
+  },
+  "author": "Dae R. Jeong",
+  "license": "MIT",
+  "dependencies": {
+    "googleapis": "^66.0.0",
+    "ytdl-core": "^4.2.1"
+  }
+}
