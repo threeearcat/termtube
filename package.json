@@ -13,7 +13,10 @@
   "author": "Dae R. Jeong",
   "license": "MIT",
   "dependencies": {
+    "fluent-ffmpeg": "^2.1.2",
     "googleapis": "^66.0.0",
+    "lame": "git+ssh://git@github.com/suldashi/node-lame.git",
+    "speaker": "^0.5.2",
     "ytdl-core": "^4.2.1"
   }
 }
