@@ -20,6 +20,7 @@ function player() {
             self.ids.add(id);
             self.playlist = Array.from(self.ids);
         });
+        console.log("The length of playlist", self.playlist.length);
     }
     /*
      * Start playing musics.
@@ -40,7 +41,7 @@ function player() {
 
     this._play = function(id) {
         const url = "https://www.youtube.com/watch?v=" + id;
-        console.log(url);
+        console.log("Playing a music from", url);
         var opt = {
             videoFormat: 'mp4',
             quality: 'lowest',
