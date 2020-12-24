@@ -6,6 +6,7 @@ const ytdl = require('ytdl-core');
 function player() {
     var self = this;
     this.ids = new Set();
+    this.playlist = [];
     EventEmitter.call(this);
     this.emitter = new EventEmitter();
     
@@ -15,7 +16,10 @@ function player() {
      * @param {An array of strings} Video IDs to be added
      */
     this.add = function(ids) {
-        ids.forEach(function(id) {self.ids.add(id);});
+        ids.forEach(function(id) {
+            self.ids.add(id);
+            self.playlist = Array.from(self.ids);
+        });
     }
     /*
      * Start playing musics.
@@ -25,11 +29,11 @@ function player() {
     }
 
     this.play = function() {
-        if (self.ids.size == 0) {
+        if (self.playlist.length == 0) {
             setTimeout(self.play, 1000);
         } else {
-            let ids = self.ids.values();
-            let id = ids.next().value;
+            // Get a random item
+            let id = self.playlist[Math.floor(Math.random() * self.playlist.length)];
             self._play(id);
         }
     }
@@ -55,12 +59,13 @@ function player() {
             sampleRate: 44100     // 44,100 Hz sample rate
         });
 
+        speaker.on('flush', function() {
+            self.emitter.emit('play');
+        });
+
         ffmpeg(video)
             .on('error', function(e) {
                 console.log(e);
-            })
-            .on('end', function() {
-                self.emitter.emit('play');
             })
             .format('mp3')
             .pipe(decoder())
