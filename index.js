@@ -13,14 +13,14 @@ function getLikes(auth, callback) {
 
     youtube.videos.list({
         auth: auth,
-        "part": "id",
+        "part": "id,snippet",
         "myRating": "like",
         "maxResults": 50,
         pageToken: token,
     }).then(function(res) {
         let ids = res.data.items.map(a => a.id);
         console.log("Received IDs", ids);
-        callback(ids);
+        callback(res.data.items);
         token = res.data.nextPageToken;
         var timeout = 1;
         if (typeof token === 'undefined') {

@@ -1,26 +1,28 @@
 const decoder = require('lame').Decoder;
 const ffmpeg = require('fluent-ffmpeg');
 const EventEmitter = require('events').EventEmitter;
+const Speaker = require('speaker');
 const ytdl = require('ytdl-core');
 
 function player() {
     var self = this;
-    this.ids = new Set();
-    this.playlist = [];
+    this.videos = [];
     EventEmitter.call(this);
     this.emitter = new EventEmitter();
     
     /*
-     * Add IDs in the given list into this.ids if not duplicated.
+     * Add videos in the given list into this.videos if not duplicated.
      *
-     * @param {An array of strings} Video IDs to be added
+     * @param {An array of strings} Videos to be added
      */
-    this.add = function(ids) {
-        ids.forEach(function(id) {
-            self.ids.add(id);
-            self.playlist = Array.from(self.ids);
+    this.add = function(videos) {
+        videos.forEach(function(video) {
+            const found = self.videos.find(v => v.id == videos.id);
+            if (!found) {
+                self.videos.push(video);
+            }
         });
-        console.log("The length of playlist", self.playlist.length);
+        console.log("Total videos", self.videos.length);
     }
     /*
      * Start playing musics.
@@ -30,18 +32,21 @@ function player() {
     }
 
     this.play = function() {
-        if (self.playlist.length == 0) {
+        if (self.videos.length == 0) {
             setTimeout(self.play, 1000);
         } else {
             // Get a random item
-            let id = self.playlist[Math.floor(Math.random() * self.playlist.length)];
-            self._play(id);
+            let video = self.videos[Math.floor(Math.random() * self.videos.length)];
+            self._play(video);
         }
     }
 
-    this._play = function(id) {
-        const url = "https://www.youtube.com/watch?v=" + id;
+    this._play = function(video) {
+        const url = "https://www.youtube.com/watch?v=" + video.id;
+        const title = video.snippet.title;
         console.log("Playing a music from", url);
+        console.log("title", title);
+        process.stdout.write(title);
         var opt = {
             videoFormat: 'mp4',
             quality: 'lowest',
@@ -50,21 +55,18 @@ function player() {
                 return format.container === opt.videoFormat && format.audioBitrate
             }
         }
-        const video = ytdl(url, opt);
+        const source = ytdl(url, opt);
 
-        const Speaker = require('speaker');
         // Create the Speaker instance
         const speaker = new Speaker({
             channels: 2,          // 2 channels
             bitDepth: 16,         // 16-bit samples
             sampleRate: 44100     // 44,100 Hz sample rate
-        });
-
-        speaker.on('flush', function() {
+        }).on('flush', function() {
             self.emitter.emit('play');
         });
 
-        ffmpeg(video)
+        ffmpeg(source)
             .on('error', function(e) {
                 console.log(e);
             })
