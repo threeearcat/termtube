@@ -14,7 +14,7 @@ const TOKEN_PATH = TOKEN_DIR + 'youtube-nodejs-quickstart.json';
 
 exports.authorize = (callback) => {
     // Load client secrets from a local file.
-    fs.readFile('client_secret.json', function (err, content) {
+    fs.readFile(__dirname + '/client_secret.json', function (err, content) {
         if (err) {
             console.log('Error loading client secret file: ' + err);
             return;
