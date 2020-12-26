@@ -14,9 +14,9 @@ const status = Object.freeze(
 function player(sock='/tmp/command.sock') {
     var self = this;
     this.videos = [];
-    this.status = status.idle;
     EventEmitter.call(this);
     this.emitter = new EventEmitter();
+    this.title = '-';
 
     /*
      * Add videos in the given list into this.videos if not duplicated.
@@ -114,7 +114,6 @@ function player(sock='/tmp/command.sock') {
         const url = 'https://www.youtube.com/watch?v=' + video.id;
         const title = video.snippet.title;
         console.log('Playing a music from', url);
-        process.stdout.write(title);
         var opt = {
             videoFormat: 'mp4',
             quality: 'lowest',
@@ -125,20 +124,24 @@ function player(sock='/tmp/command.sock') {
         }
         const source = ytdl(url, opt);
         // The music being played
-        self.current = ffmpeg(source)
-            .on('error', function(e) {
-                console.log(e);
-            })
+        self.ffmpeg = ffmpeg(source)
+        self.ffmpeg.on('error', function(e) {
+            console.log(e);
+        });
+        self.current = self.ffmpeg
             .format('mp3')
             .pipe(decoder());
+        self.title = title;
     }
 
     this.unloadMusic = function() {
-        if (isUndef(self.speaker)) {
+        if (isUndef(self.current)) {
             return;
         }
-        self.current.close();
+        self.ffmpeg.kill();
+        self.ffmpeg =
         self.current = undefined;
+        self.title = '-';
     }
 
     this.openSpeaker = function() {
@@ -180,10 +183,18 @@ function player(sock='/tmp/command.sock') {
         self.current.pipe(self.speaker);
     }
 
-    this.checkStatus = function(status) { return self.status == status; }
-    this.setStatus = function(status) { return self.status = status; }
+    this.checkStatus = function(s) { return self.status == s; }
+    this.setStatus = function(s) {
+        console.log('change status:', s);
+        const misc = s === status.paused ? '(paused)' : '';
+        process.stdout.write(self.title + ' ' + misc);
+        return self.status = s;
+    }
 
     this.handler = command.handler(self.emitter, sock);
+
+    // Now we are ready
+    this.setStatus(status.idle);
 
     return this
 }
