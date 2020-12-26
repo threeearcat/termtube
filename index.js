@@ -1,7 +1,21 @@
 const fs = require('fs');
-const auth = require(__dirname + "/auth.js")
 const {google} = require('googleapis');
-const player = require('./player');
+const {player} = require(__dirname + '/player');
+const auth = require(__dirname + "/auth.js")
+
+const args = require('yargs')
+      .scriptName("termtube")
+      .usage('$0 [--help] [-v|--verbose]', 'Toy youtube player')
+      .option('verbose', {
+          alias: 'v',
+          type: 'boolean',
+          description: 'Run with verbose logging'
+      })
+      .version(false)
+      .help()
+      .argv;
+
+if (!args.v) { console.log = function() {} }
 
 var token = '';
 /*
@@ -33,7 +47,7 @@ function getLikes(auth, callback) {
 }
 
 function main() {
-    var p = new player.player();
+    var p = new player();
     auth.authorize(function(auth) { getLikes(auth, p.add); });
 }
 

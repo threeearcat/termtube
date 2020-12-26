@@ -1,13 +1,10 @@
 var net = require('net');
 const fs = require('fs');
 
-function handler(obj) {
-    let sockpath = process.argv.length > 2 ? process.argv[2] : '/tmp/command.sock';
-    var server = net.createServer(function (s) { _handler(server, s, obj); });
-
-    server.on('error', function(e) { trycleanup(e, server, sockpath); });
-
-    listen(server, sockpath);
+function handler(obj, sockpath) {
+    var server = net.createServer(function (s) { _handler(server, s, obj); })
+        .on('error', function(e) { trycleanup(e, server, sockpath); });
+    _listen(server, sockpath);
 }
 module.exports.handler = handler;
 
@@ -40,7 +37,7 @@ function trycleanup(e, server, sockpath) {
         // We can't connect the server. Clean up.
         console.log('cleaning up');
         fs.unlinkSync(sockpath);
-        listen(server, sockpath);
+        _listen(server, sockpath);
     });
 
     clientSocket.connect({path: sockpath}, function() {
@@ -53,7 +50,7 @@ function _quit() {
     process.exit();
 }
 
-function listen(server, sockpath) {
+function _listen(server, sockpath) {
     console.log('listen to ' + sockpath);
     server.listen(sockpath);
 }

@@ -11,7 +11,7 @@ const status = Object.freeze(
      'paused'  :3
     })
 
-function player() {
+function player(sock='/tmp/command.sock') {
     var self = this;
     this.videos = [];
     this.status = status.idle;
@@ -183,7 +183,7 @@ function player() {
     this.checkStatus = function(status) { return self.status == status; }
     this.setStatus = function(status) { return self.status = status; }
 
-    this.handler = command.handler(self.emitter);
+    this.handler = command.handler(self.emitter, sock);
 
     return this
 }
