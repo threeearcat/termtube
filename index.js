@@ -35,7 +35,6 @@ function getLikes(auth, callback) {
 function main() {
     var p = new player.player();
     auth.authorize(function(auth) { getLikes(auth, p.add); });
-    p.start();
 }
 
 if (require.main === module) {

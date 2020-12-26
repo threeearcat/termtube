@@ -3,6 +3,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const EventEmitter = require('events').EventEmitter;
 const Speaker = require('speaker');
 const ytdl = require('ytdl-core');
+const command = require(__dirname + '/command.js');
 
 const status = Object.freeze(
     {'idle'    :1,
@@ -151,13 +152,24 @@ function player() {
             self.stop();
             self.emitter.emit('start');
         });
+        self.speaker.on('error', function(e) {
+            // FIXME: The speaker error can be suppressed by emitting
+            // the 'close' event instead of calling .close() in
+            // .closeSpeaker(). But it slows down the close so I don't
+            // want to. For now, just ignore the below error as it
+            // likely indicates that we closed the speaker.
+            if (e.toString() !== 'Error: write() failed: 0') {
+                console.log(e);
+                self.stop();
+            }
+        });
     }
 
     this.closeSpeaker = function() {
         if (isUndef(self.speaker)) {
             return;
         }
-        self.speaker.emit('close');
+        self.speaker.close();
         self.speaker = undefined;
     }
 
@@ -170,6 +182,8 @@ function player() {
 
     this.checkStatus = function(status) { return self.status == status; }
     this.setStatus = function(status) { return self.status = status; }
+
+    this.handler = command.handler(self.emitter);
 
     return this
 }
