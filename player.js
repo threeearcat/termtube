@@ -92,11 +92,21 @@ function player() {
         self.setStatus(status.playing);
     }
 
+    /*
+     * Play a next music.
+     */
+    this.next = function() {
+        console.log('next');
+        self.stop();
+        self.start();
+    }
+
     // Register event handlers
     this.emitter.on('start', self.start);
     this.emitter.on('stop', self.stop);
     this.emitter.on('pause', self.pause);
     this.emitter.on('resume', self.resume);
+    this.emitter.on('next', self.next);
 
     // Workers
     this.loadMusic = function(video) {
