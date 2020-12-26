@@ -4,16 +4,23 @@ const EventEmitter = require('events').EventEmitter;
 const Speaker = require('speaker');
 const ytdl = require('ytdl-core');
 
+const status = Object.freeze(
+    {'idle'    :1,
+     'playing' :2,
+     'paused'  :3
+    })
+
 function player() {
     var self = this;
     this.videos = [];
+    this.status = status.idle;
     EventEmitter.call(this);
     this.emitter = new EventEmitter();
-    
+
     /*
      * Add videos in the given list into this.videos if not duplicated.
      *
-     * @param {An array of strings} Videos to be added
+     * @param {An array of videos} Videos to be added
      */
     this.add = function(videos) {
         videos.forEach(function(video) {
@@ -22,30 +29,80 @@ function player() {
                 self.videos.push(video);
             }
         });
-        console.log("Total videos", self.videos.length);
-    }
-    /*
-     * Start playing musics.
-     */
-    this.start = function() {
-        self.emitter.emit('play');
+        console.log('Total videos', self.videos.length);
     }
 
-    this.play = function() {
+    /*
+     * Play a music randomly selected from the playlist.
+     */
+    this.start = function() {
+        console.log('start');
+        if (!self.checkStatus(status.idle)) {
+            return;
+        }
         if (self.videos.length == 0) {
-            setTimeout(self.play, 1000);
+            setTimeout(self.start, 1000);
         } else {
             // Get a random item
             let video = self.videos[Math.floor(Math.random() * self.videos.length)];
-            self._play(video);
+            // Play a music from the beginning.
+            self.loadMusic(video);
+            self.openSpeaker();
+            self.playCurrent();
+            self.setStatus(status.playing);
         }
     }
 
-    this._play = function(video) {
-        const url = "https://www.youtube.com/watch?v=" + video.id;
+    /*
+     * Pause playing a music. If the player is not playing a music, do nothing.
+     */
+    this.pause = function() {
+        console.log('pause');
+        if (!self.checkStatus(status.playing)) {
+            return;
+        }
+        self.closeSpeaker();
+        self.setStatus(status.paused);
+    }
+
+    /*
+     * Stop playing a music. If the player is not playing a music, do nothing.
+     */
+    this.stop = function() {
+        console.log('stop');
+        if (!self.checkStatus(status.playing) &&
+            !self.checkStatus(status.paused)) {
+            return;
+        }
+        self.closeSpeaker();
+        self.unloadMusic();
+        self.setStatus(status.idle);
+    }
+
+    /*
+     * Resume playing a music.
+     */
+    this.resume = function() {
+        console.log('resume');
+        if (!self.checkStatus(status.paused)) {
+            return;
+        }
+        self.openSpeaker();
+        self.playCurrent();
+        self.setStatus(status.playing);
+    }
+
+    // Register event handlers
+    this.emitter.on('start', self.start);
+    this.emitter.on('stop', self.stop);
+    this.emitter.on('pause', self.pause);
+    this.emitter.on('resume', self.resume);
+
+    // Workers
+    this.loadMusic = function(video) {
+        const url = 'https://www.youtube.com/watch?v=' + video.id;
         const title = video.snippet.title;
-        console.log("Playing a music from", url);
-        console.log("title", title);
+        console.log('Playing a music from', url);
         process.stdout.write(title);
         var opt = {
             videoFormat: 'mp4',
@@ -56,35 +113,58 @@ function player() {
             }
         }
         const source = ytdl(url, opt);
-
-        // Create the Speaker instance
-        const speaker = new Speaker({
-            channels: 2,          // 2 channels
-            bitDepth: 16,         // 16-bit samples
-            sampleRate: 44100     // 44,100 Hz sample rate
-        }).on('flush', function() {
-            self.emitter.emit('play');
-        });
-
-        ffmpeg(source)
+        // The music being played
+        self.current = ffmpeg(source)
             .on('error', function(e) {
                 console.log(e);
             })
             .format('mp3')
-            .pipe(decoder())
-            .pipe(speaker);
+            .pipe(decoder());
     }
 
-    /*
-     * Pause playing a music. If the player is not playing a music, do nothing.
-     */
-    this.pause = function() {}
+    this.unloadMusic = function() {
+        if (isUndef(self.speaker)) {
+            return;
+        }
+        self.current.close();
+        self.current = undefined;
+    }
 
-    this._pause = function() {}
+    this.openSpeaker = function() {
+        if (!isUndef(self.speaker)) {
+            return;
+        }
+        // Create the Speaker instance to play the music
+        self.speaker = new Speaker({});
+        self.speaker.on('flush', function() {
+            console.log('speaker flushed');
+            self.stop();
+            self.emitter.emit('start');
+        });
+    }
 
-    // Register event handlers
-    this.emitter.on('play', self.play);
-    this.emitter.on('pause', self.pause);
+    this.closeSpeaker = function() {
+        if (isUndef(self.speaker)) {
+            return;
+        }
+        self.speaker.emit('close');
+        self.speaker = undefined;
+    }
+
+    this.playCurrent = function() {
+        if (isUndef(self.current) || isUndef(self.speaker)) {
+            return;
+        }
+        self.current.pipe(self.speaker);
+    }
+
+    this.checkStatus = function(status) { return self.status == status; }
+    this.setStatus = function(status) { return self.status = status; }
+
     return this
 }
 module.exports.player = player;
+
+function isUndef(v) {
+    return typeof(v) === 'undefined';
+}
