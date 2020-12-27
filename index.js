@@ -78,7 +78,23 @@ function openPrinter(sock) {
     unix.handler(printer, sock);
 }
 
+function handlePdeath() {
+    // Exit when the parent exits
+    const libsys = require('libsys');
+    if (process.platform === 'linux') {
+        const SYS_prctl = 157,
+              PR_SET_PDEATHSIG = 1,
+              SIGKILL = 9;
+        const ret = libsys.syscall(SYS_prctl, PR_SET_PDEATHSIG, SIGKILL);
+        if (ret !== 0) {
+            console.error('failed to set PR_SET_PDEATHSIG');
+        }
+    }
+    // XXX: I may handle the MacOS later, but none of others.
+}
+
 function main() {
+    handlePdeath();
     if (args.d) {
         // Run as a daemon
         openPrinter(sock);

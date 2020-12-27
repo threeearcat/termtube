@@ -53,7 +53,7 @@ function trycleanup(e, server, sockpath) {
 }
 
 function _quit() {
-    console.log('Cannot open the command handler. exit');
+    console.log('Cannot open the command handler. exit.');
     process.exit();
 }
 
