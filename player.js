@@ -55,18 +55,6 @@ function player(sock='/tmp/command.sock') {
     }
 
     /*
-     * Pause playing a music. If the player is not playing a music, do nothing.
-     */
-    this.pause = function() {
-        console.log('pause');
-        if (!self.checkStatus(status.playing)) {
-            return;
-        }
-        self.closeSpeaker();
-        self.setStatus(status.paused);
-    }
-
-    /*
      * Stop playing a music. If the player is not playing a music, do nothing.
      */
     this.stop = function() {
@@ -78,6 +66,29 @@ function player(sock='/tmp/command.sock') {
         self.closeSpeaker();
         self.unloadMusic();
         self.setStatus(status.idle);
+    }
+
+    /*
+     * Callback to handle start/stop commands
+     */
+    this.startstop = function() {
+        if (self.checkStatus(status.idle)) {
+            self.start();
+        } else {
+            self.stop();
+        }
+    }
+
+    /*
+     * Pause playing a music. If the player is not playing a music, do nothing.
+     */
+    this.pause = function() {
+        console.log('pause');
+        if (!self.checkStatus(status.playing)) {
+            return;
+        }
+        self.closeSpeaker();
+        self.setStatus(status.paused);
     }
 
     /*
@@ -94,6 +105,17 @@ function player(sock='/tmp/command.sock') {
     }
 
     /*
+     * Callback to handle pause/resume commands
+     */
+    this.pauseresume = function() {
+        if (self.checkStatus(status.playing)) {
+            self.pause();
+        } else if (self.checkStatus(status.paused)) {
+            self.resume();
+        }
+    }
+
+    /*
      * Play a next music.
      */
     this.next = function() {
@@ -103,10 +125,10 @@ function player(sock='/tmp/command.sock') {
     }
 
     // Register event handlers
-    this.emitter.on('start', self.start);
-    this.emitter.on('stop', self.stop);
-    this.emitter.on('pause', self.pause);
-    this.emitter.on('resume', self.resume);
+    this.emitter.on('start', self.startstop);
+    this.emitter.on('stop', self.startstop);
+    this.emitter.on('pause', self.pauseresume);
+    this.emitter.on('resume', self.pauseresume);
     this.emitter.on('next', self.next);
 
     // Workers
