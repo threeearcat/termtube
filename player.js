@@ -28,7 +28,7 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
      */
     this.add = function(videos) {
         videos.forEach(function(video) {
-            const found = self.videos.find(v => v.id == videos.id);
+            const found = self.videos.find(v => v.id == video.id);
             if (!found) {
                 self.videos.push(video);
             }
