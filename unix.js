@@ -6,18 +6,25 @@ function handler(obj, sockpath) {
         .on('error', function(e) { trycleanup(e, server, sockpath); });
     _listen(server, sockpath);
 }
-module.exports.handler = handler;
 
 function _handler(server, stream, obj) {
     // console.log('_handler', stream);
     console.log('connected');
     stream.on('data', function(c) {
-        cmd = c.toString();
-        cmd.split(/\s+/).forEach(c => {
-            console.log('cmd:', c);
-            obj.emit(c);
+        cmds = c.toString()
+        // Handle comma-separated commands
+        cmds.split(',').forEach(c => {
+            _handleCommand(c, obj);
         });
     });
+}
+
+function _handleCommand(rawCmd, obj) {
+    // FIXME: very inefficient
+    [cmd, ...toks] = rawCmd.trim().split(':');
+    const args = toks.join(':')
+    console.log('cmd:', cmd, 'args:', args);
+    obj.emit(cmd, args);
 }
 
 function trycleanup(e, server, sockpath) {
@@ -54,3 +61,21 @@ function _listen(server, sockpath) {
     console.log('listen to ' + sockpath);
     server.listen(sockpath);
 }
+
+function client(sockpath) {
+    var client = net.connect({path: sockpath}, function() {
+        console.log('connected to server', sockpath);
+    });
+    return client;
+}
+
+function write(client, data) {
+    console.log('send data:', data);
+    client.write(data);
+}
+
+module.exports = {
+    handler: handler,
+    client: client,
+    write: write,
+};

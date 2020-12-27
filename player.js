@@ -1,9 +1,10 @@
+const fs = require('fs');
 const decoder = require('lame').Decoder;
 const ffmpeg = require('fluent-ffmpeg');
 const EventEmitter = require('events').EventEmitter;
 const Speaker = require('speaker');
 const ytdl = require('ytdl-core');
-const command = require(__dirname + '/command.js');
+const unix = require(__dirname + '/unix');
 
 const status = Object.freeze(
     {'idle'    :1,
@@ -11,10 +12,12 @@ const status = Object.freeze(
      'paused'  :3
     })
 
-function player(sock='/tmp/command.sock') {
+const commandSockDef = '/tmp/command.sock';
+const outputSockDef = '/tmp/termtube_output.sock';
+
+function player(commandSock=commandSockDef, outputSock=outputSockDef) {
     var self = this;
     this.videos = [];
-    EventEmitter.call(this);
     this.emitter = new EventEmitter();
     this.title = '-';
 
@@ -208,12 +211,25 @@ function player(sock='/tmp/command.sock') {
     this.checkStatus = function(s) { return self.status == s; }
     this.setStatus = function(s) {
         console.log('change status:', s);
+        self.status = s;
+        self._printTitle(s);
+    }
+    this._printTitle = function(s) {
         const misc = s === status.paused ? '(paused)' : '';
-        process.stdout.write(self.title + ' ' + misc);
-        return self.status = s;
+        const title = self.title + ' ' + misc;
+        process.stdout.write(title);
+        if (self.client) {
+            self.client.write('title:' + title);
+        }
+    }
+    this.ping = function() {
+        console.log('got pinged');
+        self.client = unix.client(outputSock);
+        self.setStatus(self.status);
     }
 
-    this.handler = command.handler(self.emitter, sock);
+    // Launch sockets
+    this.handler = unix.handler(self.emitter, commandSock);
 
     // Now we are ready
     this.setStatus(status.idle);
