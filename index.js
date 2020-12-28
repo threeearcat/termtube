@@ -93,8 +93,17 @@ function handlePdeath() {
     // XXX: I may handle the MacOS later, but none of others.
 }
 
+function logPID() {
+    fs.writeFile(process.env.HOME + '/.termtube.pid', process.pid.toString(), function (err) {
+        if (err) {
+            console.error(err);
+        }
+    });
+}
+
 function main() {
     handlePdeath();
+    logPID();
     if (args.d) {
         // Run as a daemon
         openPrinter(sock);
