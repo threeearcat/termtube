@@ -78,31 +78,22 @@ function openPrinter(sock) {
     unix.handler(printer, sock);
 }
 
-function handlePdeath() {
-    // Exit when the parent exits
-    const libsys = require('libsys');
-    if (process.platform === 'linux') {
-        const SYS_prctl = 157,
-              PR_SET_PDEATHSIG = 1,
-              SIGKILL = 9;
-        const ret = libsys.syscall(SYS_prctl, PR_SET_PDEATHSIG, SIGKILL);
-        if (ret !== 0) {
-            console.error('failed to set PR_SET_PDEATHSIG');
-        }
-    }
-    // XXX: I may handle the MacOS later, but none of others.
+function killIfExist(fn) {
+    const pid = fs.readFileSync(fn, 'utf8');
+    try {
+        process.kill(pid);
+    } catch (e) { /* Ignore */ }
 }
 
 function logPID() {
-    fs.writeFile(process.env.HOME + '/.termtube.pid', process.pid.toString(), function (err) {
-        if (err) {
-            console.error(err);
-        }
+    const fn = process.env.HOME + '/.termtube.pid';
+    killIfExist(fn);
+    fs.writeFile(fn, process.pid.toString(), function (err) {
+        if (err) { console.error(err); }
     });
 }
 
 function main() {
-    handlePdeath();
     logPID();
     if (args.d) {
         // Run as a daemon

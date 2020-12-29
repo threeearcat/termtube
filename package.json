@@ -16,7 +16,6 @@
     "fluent-ffmpeg": "^2.1.2",
     "googleapis": "^66.0.0",
     "lame": "git+ssh://git@github.com/suldashi/node-lame.git",
-    "libsys": "^3.0.0",
     "pm2": "^4.5.1",
     "speaker": "^0.5.2",
     "yargs": "^16.2.0",
