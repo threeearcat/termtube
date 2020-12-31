@@ -12,8 +12,8 @@ function _handler(server, stream, obj) {
     console.log('connected');
     stream.on('data', function(c) {
         cmds = c.toString()
-        // Handle comma-separated commands
-        cmds.split(',').forEach(c => {
+        // Handle (backslash + comma)-separated commands
+        cmds.split('\\,').forEach(c => {
             _handleCommand(c, obj);
         });
     });
