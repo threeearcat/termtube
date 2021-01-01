@@ -113,7 +113,22 @@ function main() {
 }
 
 if (require.main === module) {
-    main();
+    const electron = require('electron')
+    const proc = require('child_process')
+
+    // will print something similar to /Users/maf/.../Electron
+    console.log(electron)
+
+    // spawn Electron
+    const child = proc.spawn(electron, ["/home/daeryong/playground/termtube/ui.js"]);
+
+    child.stdout.on('data', (data) => {
+        console.log(`${data}`);
+    });
+
+    child.stdin.write("hihi");
+
+    // main();
 }
 
 function _errCheck(err) { if (err) { _quit(err); }}
