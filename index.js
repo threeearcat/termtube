@@ -120,7 +120,7 @@ if (require.main === module) {
     console.log(electron)
 
     // spawn Electron
-    const child = proc.spawn(electron, ["/home/daeryong/playground/termtube/ui.js"]);
+    const child = proc.spawn(electron, ["/home/daeryong/playground/termtube/ui_main.js"]);
 
     child.stdout.on('data', (data) => {
         console.log(`${data}`);
