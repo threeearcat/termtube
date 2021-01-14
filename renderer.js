@@ -5,19 +5,23 @@
 // selectively enable features needed in the rendering
 // process.
 
-const alertOnlineStatus = () => {
-    window.alert(navigator.onLine ? 'online' : 'offline')
+const {ipcRenderer} = require('electron');
+
+function createElem(video) {
+    var entry = document.createElement('li');
+    var title = document.createTextNode(video)
+    entry.appendChild(title);
+    return entry;
 }
 
-window.addEventListener('online', alertOnlineStatus)
+function listVideo(video) {
+    var videos = document.getElementById('videos')
+    var elem = createElem(video);
+    videos.appendChild(elem);
+}
 
+ipcRenderer.on('video', (event, arg) => {
+    listVideo(arg);
+});
 
-
-const {ipcRenderer} = require('electron');
-ipcRenderer.on('ping', (event, message) => {
-    window.alaert(message);
-    elem.dispatchEvent(new Event('online'));
-})
-
-ipcRenderer.on('hi', () => window.alert('hi'));
-ipcRenderer.send('something');
+ipcRenderer.send('req');

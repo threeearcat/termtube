@@ -20,6 +20,7 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
     this.videos = [];
     this.emitter = new EventEmitter();
     this.title = '-';
+    this.listgui = undefined;
 
     /*
      * Add videos in the given list into this.videos if not duplicated.
@@ -31,6 +32,8 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
             const found = self.videos.find(v => v.id == video.id);
             if (!found) {
                 self.videos.push(video);
+                // TODO: Do I need to this?
+                self.printVideoGUI(video);
             }
         });
         console.log('Total videos', self.videos.length);
@@ -222,10 +225,32 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
             self.client.write('title:' + title);
         }
     }
+
     this.ping = function() {
         console.log('got pinged');
         self.client = unix.client(outputSock);
         self.setStatus(self.status);
+    }
+
+    this.openList = function() {
+        const electron = require('electron')
+        const proc = require('child_process')
+        // spawn Electron
+        self.listgui = proc.spawn(electron, ["/home/daeryong/playground/termtube/ui_main.js"]);
+
+        self.listgui.stdout.on('data', (data) => {
+            console.log(`${data}`);
+        });
+
+        self.videos.forEach(function(video) {
+            self.printVideoGUI(video);
+        });
+    }
+
+    this.printVideoGUI = function(video) {
+        if (self.listgui !== undefined) {
+            self.listgui.stdin.write(video.snippet.title + '\n');
+        }
     }
 
     // Launch sockets
@@ -234,6 +259,7 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
     // Now we are ready
     this.setStatus(status.idle);
 
+    setTimeout(self.openList, 5000);
     return this
 }
 module.exports.player = player;

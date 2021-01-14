@@ -2,6 +2,8 @@
 const {app, BrowserWindow, ipcMain, ipcRenderer} = require('electron')
 const path = require('path')
 
+var videos = [];
+
 function createWindow () {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
@@ -17,13 +19,6 @@ function createWindow () {
 
   // and load the index.html of the app.
   mainWindow.loadFile('index.html')
-  
-  // Open the DevTools.
-    mainWindow.webContents.openDevTools()
-
-    mainWindow.webContents.on('focus', function() {
-        console.log('HI');
-    });
 }
 
 // This method will be called when Electron has finished
@@ -49,14 +44,17 @@ app.on('window-all-closed', function () {
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and require them here.
 
-ipcMain.on('something', function(event) {
-    console.log('HI');
-    event.sender.send('hi', 'hi');
+ipcMain.on('req', function(event) {
+    videos.forEach( (video) => {
+        event.sender.send('video', video);
+    });
 });
 
 process.stdin.on('data', (data) => {
-    process.stdout.write(data);
+    const received = String(data).split('\n');
+    received.forEach((video) => {
+        if (video.length >= 1) {
+            videos.push(video);
+        }
+    });
 });
-
-
-
