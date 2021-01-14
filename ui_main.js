@@ -50,6 +50,10 @@ ipcMain.on('req', function(event) {
     });
 });
 
+ipcMain.on('click', function(event, arg) {
+    process.stdout.write(arg);
+});
+
 process.stdin.on('data', (data) => {
     const received = String(data).split('\n');
     received.forEach((video) => {

@@ -20,7 +20,7 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
     this.videos = [];
     this.emitter = new EventEmitter();
     this.title = '-';
-    this.listgui = undefined;
+    this.listIface = undefined;
 
     /*
      * Add videos in the given list into this.videos if not duplicated.
@@ -38,6 +38,13 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
         console.log('Total videos', self.videos.length);
     }
 
+    this.__start = function(id, title) {
+        self.loadMusic(id, title);
+        self.openSpeaker();
+        self.playCurrent();
+        self.setStatus(status.playing);
+    }
+
     /*
      * Play a music randomly selected from the playlist.
      */
@@ -52,10 +59,7 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
             // Get a random item
             let video = self.videos[Math.floor(Math.random() * self.videos.length)];
             // Play a music from the beginning.
-            self.loadMusic(video);
-            self.openSpeaker();
-            self.playCurrent();
-            self.setStatus(status.playing);
+            self.__start(video.id, video.snippet.title);
         }
     }
 
@@ -139,8 +143,15 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
 
         // spawn Electron
         self.listIface = proc.spawn(electron, [__dirname + "/ui_main.js"]);
+        self.listIface.on('exit', function() {
+            console.log('window is destoryed');
+            self.listIface = undefined;
+        });
+
         self.listIface.stdout.on('data', (data) => {
-            console.log(`${data}`);
+            const video = JSON.parse(data);
+            self.stop();
+            self.__start(video.id, video.title);
         });
 
         self.videos.forEach(function(video) {
@@ -150,7 +161,13 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
 
     this.printVideoGUI = function (video) {
         if (self.listIface !== undefined) {
-            self.listIface.stdin.write(video.snippet.title + '\n');
+            data = JSON.stringify(
+                {
+                    "title": video.snippet.title,
+                    "id": video.id
+                }
+            );
+            self.listIface.stdin.write(data + '\n');
         }
     }
 
@@ -163,9 +180,8 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
     this.emitter.on('listgui', self.listgui);
 
     // Workers
-    this.loadMusic = function(video) {
-        const url = 'https://www.youtube.com/watch?v=' + video.id;
-        const title = video.snippet.title;
+    this.loadMusic = function(id, title) {
+        const url = 'https://www.youtube.com/watch?v=' + id;
         console.log('Playing a music from', url);
         var opt = {
             videoFormat: 'mp4',

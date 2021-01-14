@@ -79,10 +79,13 @@ function openPrinter(sock) {
 }
 
 function killIfExist(fn) {
-    const pid = fs.readFileSync(fn, 'utf8');
     try {
-        process.kill(pid);
-    } catch (e) { /* Ignore */ }
+        const pid = fs.readFileSync(fn, 'utf8');
+        if (pid.length == 0) {
+            return;
+        }
+        process.kill(pid, 'SIGKILL');
+    } catch (e) { console.error(e); }
 }
 
 function logPID() {

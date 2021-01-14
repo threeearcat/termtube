@@ -7,16 +7,23 @@
 
 const {ipcRenderer} = require('electron');
 
-function createElem(video) {
+function createElem(videojson) {
     var entry = document.createElement('li');
-    var title = document.createTextNode(video)
+    const video = JSON.parse(videojson);
+    const title = document.createTextNode(video.title)
+    const id = video.id
+
     entry.appendChild(title);
+    entry.addEventListener('click', function(event) {
+        ipcRenderer.send('click', videojson);
+    });
+    entry.setAttribute('id', id);
     return entry;
 }
 
-function listVideo(video) {
+function listVideo(videojson) {
     var videos = document.getElementById('videos')
-    var elem = createElem(video);
+    var elem = createElem(videojson);
     videos.appendChild(elem);
 }
 
