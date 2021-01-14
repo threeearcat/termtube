@@ -32,7 +32,6 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
             const found = self.videos.find(v => v.id == video.id);
             if (!found) {
                 self.videos.push(video);
-                // TODO: Do I need to this?
                 self.printVideoGUI(video);
             }
         });
@@ -130,12 +129,38 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
         self.start();
     }
 
+    /*
+     * List musics in a GUI interface
+     */
+    this.listgui = function(video) {
+        console.log('list')
+        const electron = require('electron')
+        const proc = require('child_process')
+
+        // spawn Electron
+        self.listIface = proc.spawn(electron, [__dirname + "/ui_main.js"]);
+        self.listIface.stdout.on('data', (data) => {
+            console.log(`${data}`);
+        });
+
+        self.videos.forEach(function(video) {
+            self.printVideoGUI(video);
+        });
+    }
+
+    this.printVideoGUI = function (video) {
+        if (self.listIface !== undefined) {
+            self.listIface.stdin.write(video.snippet.title + '\n');
+        }
+    }
+
     // Register event handlers
     this.emitter.on('start', self.startstop);
     this.emitter.on('stop', self.startstop);
     this.emitter.on('pause', self.pauseresume);
     this.emitter.on('resume', self.pauseresume);
     this.emitter.on('next', self.next);
+    this.emitter.on('listgui', self.listgui);
 
     // Workers
     this.loadMusic = function(video) {
@@ -232,34 +257,12 @@ function player(commandSock=commandSockDef, outputSock=outputSockDef) {
         self.setStatus(self.status);
     }
 
-    this.openList = function() {
-        const electron = require('electron')
-        const proc = require('child_process')
-        // spawn Electron
-        self.listgui = proc.spawn(electron, ["/home/daeryong/playground/termtube/ui_main.js"]);
-
-        self.listgui.stdout.on('data', (data) => {
-            console.log(`${data}`);
-        });
-
-        self.videos.forEach(function(video) {
-            self.printVideoGUI(video);
-        });
-    }
-
-    this.printVideoGUI = function(video) {
-        if (self.listgui !== undefined) {
-            self.listgui.stdin.write(video.snippet.title + '\n');
-        }
-    }
-
     // Launch sockets
     this.handler = unix.handler(self.emitter, commandSock);
 
     // Now we are ready
     this.setStatus(status.idle);
 
-    setTimeout(self.openList, 5000);
     return this
 }
 module.exports.player = player;
