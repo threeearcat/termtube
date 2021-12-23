@@ -54,23 +54,6 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef) {
 		}
 
 		this.mpd_add = function(id, title) {
-				const exec = require('child_process').exec;
-				const url = "https://youtu.be/" + id;
-				const cmd = 'youtube-dl -g ' + url;
-				exec(cmd, function (err, stdout, stderr) {
-						if (err) throw err;
-						const lines = stdout.split(/\r?\n/).filter(function(line) {
-								return line.length != 0;
-						});
-						if (lines.length == 0) {
-								return false
-						}
-						const music_url = lines[lines.length - 1];
-						self.mpd_command('add', [music_url], function(err, msg) {
-								if (err) throw err;
-								self.mpd_start();
-						});
-				});
 		}
 
 		this.mpd_start = function() {
@@ -96,19 +79,7 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef) {
 				self.mpd_state = state;
 		}
 
-    /*
-     * Add videos in the given list into this.videos if not duplicated.
-     *
-     * @param {An array of videos} Videos to be added
-     */
-    this.add = function(videos) {
-        videos.forEach(function(video) {
-            const found = self.videos.find(v => v.id == video.id);
-            if (!found) {
-                self.videos.push(video);
-            }
-        });
-        console.log('Total videos', self.videos.length);
+    this.add = function(id, title) {
     }
 
     this.__start = function(id, title) {
