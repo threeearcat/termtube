@@ -2,6 +2,9 @@
 
 const auth = require(__dirname + "/auth.js");
 const {google} = require('googleapis');
+const {player} = require(__dirname + '/player');
+
+let p = new player();
 
 function retrieve_video(auth, callback, token) {
     console.log("Retrieving videos", token);
@@ -31,7 +34,7 @@ function retrieve_video(auth, callback, token) {
 
 function auth_callback(auth) {
     console.log("auth done");
-    retrieve_video(auth, undefined, '');
+    retrieve_video(auth, p.add, '');
 }
 
 const scopes = ['https://www.googleapis.com/auth/youtube.readonly'];
