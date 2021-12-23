@@ -13,9 +13,9 @@ const have_path = process.env.HOME + '/.mpd/music/have.json';
 
 let have = [];
 if (fs.existsSync(have_path)) {
-		const buf = fs.readFileSync(have_path);
-		const json = buf.toString()
-		have = JSON.parse(json);
+    const buf = fs.readFileSync(have_path);
+    const json = buf.toString()
+    have = JSON.parse(json);
 }
 
 function retrieve_video(auth, callback, token) {
@@ -53,17 +53,18 @@ function auth_callback(auth) {
     let download_callback = function(id, title, success) {
         if (success) {
             have.push(to_json(id, title));
-						fs.writeFileSync(have_path, JSON.stringify(have));
-						console.log(have);
-            // p.add(id, title);
+            fs.writeFileSync(have_path, JSON.stringify(have));
+            p.add(id, title);
         }
     }
     let callback = function(video) {
-        const found = have.findIndex(elem => JSON.stringify(elem) === JSON.stringify(to_json(video.id, video.snippet.title)));
+        let id = video.id
+        let title = video.snippet.title
+        const found = have.findIndex(elem => JSON.stringify(elem) === JSON.stringify(to_json(id, title)));
         if (found != -1) {
             // We already downloaded it before
-						console.log('Already downloaded', video.snippet.title);
-            // p.add(id, title);
+            console.log('Already downloaded', title);
+            p.add(id, title);
             return;
         } else {
             d.download(video, download_callback);
