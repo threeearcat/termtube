@@ -57,15 +57,18 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef) {
 
     this.add = function(id, title) {
         if (self.videos.findIndex(elem => elem == id) != -1) {
-
             return;
         }
-        self.videos.push(id);
+        filename = id + '.webm';
+        self.videos.push(filename);
         self.mpd_command('update')
-        self.mpd_command('add', [id+'.webm'])
+        self.mpd_command('add', [filename])
     }
 
     this.start = function() {
+        if (self.mpd_check_state('stop')) {
+            self.reload();
+        }
         self.mpd_command('play');
     }
 
@@ -90,9 +93,23 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef) {
         }
     }
 
+    this.reload = function() {
+        self.mpd_command('clear');
+        self.mpd_command('update');
+        self.videos.forEach(function (video) {
+            self.mpd_command('add', [video]);
+        });
+    }
+
+    this.next = function() {
+        self.client.sendCommand('next');
+    }
+
     // Register event handlers
     this.emitter.on('start', self.startstop);
     this.emitter.on('stop', self.startstop);
+    this.emitter.on('reload', self.reload);
+    this.emitter.on('next', self.next);
 
     // Launch sockets
     this.handler = unix.handler(self.emitter, commandSock);
