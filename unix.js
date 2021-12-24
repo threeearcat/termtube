@@ -63,19 +63,15 @@ function _listen(server, sockpath) {
 }
 
 function client(sockpath) {
-    var client = net.connect({path: sockpath}, function() {
+    var client = net.connect(sockpath, function() {
         console.log('connected to server', sockpath);
+    }).on('error', function(err) {
+        console.log('failed to connect to server', sockpath);
     });
     return client;
-}
-
-function write(client, data) {
-    console.log('send data:', data);
-    client.write(data);
 }
 
 module.exports = {
     handler: handler,
     client: client,
-    write: write,
 };
