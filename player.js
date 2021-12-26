@@ -5,13 +5,22 @@ const mpd = require('mpd');
 
 const commandSockDef = '/tmp/command.sock';
 const titleSockDef = '/tmp/title.sock';
+const lofiURLFileDef = process.env.HOME + '/.mpd/lofi.lst';
 
-function player(commandSock=commandSockDef, titleSock=titleSockDef) {
+function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=lofiURLFileDef) {
     let self = this;
     this.videos = [];
+    this.mode = 'likes';
 
     // Player's attributes
     this.emitter = new EventEmitter();
+    try {
+        const raw = fs.readFileSync(lofiURLFile);
+        this.lofiURLs = raw.toString('utf-8').split('\n');
+    } catch {
+        console.log('failed to read the lofi URLs', lofiURLFile);
+        this.lofiURLs = [];
+    }
 
     // MPD's attributes
     this.mpd_ready = false;
@@ -81,7 +90,8 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef) {
         }
         self.videos.push({'title': title, 'filename': filename});
         self.mpd_command('update')
-        self.mpd_command('add', [filename])
+        if (self.mode == 'likes')
+            self.mpd_command('add', [filename])
     }
 
     this.start = function() {
@@ -115,13 +125,42 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef) {
     this.reload = function() {
         self.mpd_command('clear');
         self.mpd_command('update');
-        self.videos.forEach(function (video) {
-            self.mpd_command('add', [video.filename]);
-        });
+        if (self.mode == 'likes') {
+            self.videos.forEach(function (video) {
+                self.mpd_command('add', [video.filename]);
+            });
+        }
     }
 
     this.next = function() {
         self.mpd.sendCommand('next');
+    }
+
+    this.mode_change = function() {
+        if (self.mode == 'likes') {
+            console.log('change mode to lofi');
+            self.mode = 'lofi';
+            self.mpd_command('clear');
+            self.lofiURLs.forEach(function(URL) {
+                if (URL.length == 0)
+                    return;
+                console.log('adding URL', URL);
+                const exec = require('child_process').exec;
+                exec('youtube-dl -g ' + URL + ' | tail -n 1',
+                     function (err, stdout, stderr) {
+                         if (err) {
+                             console.log(err);
+                             return;
+                         }
+                         stdout = stdout.trim();
+                         self.mpd_command('add', [stdout]);
+                     });
+            });
+        } else {
+            console.log('change mode to likes');
+            self.mode = 'likes';
+            self.reload();
+        }
     }
 
     // Register event handlers
@@ -129,6 +168,7 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef) {
     this.emitter.on('stop', self.startstop);
     this.emitter.on('reload', self.reload);
     this.emitter.on('next', self.next);
+    this.emitter.on('mode-change', self.mode_change);
 
     // Launch sockets
     this.handler = unix.handler(self.emitter, commandSock);
