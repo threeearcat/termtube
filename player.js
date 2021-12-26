@@ -28,7 +28,7 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef) {
             const re = /^file: ([a-z0-9\.\-\_]*)$/im;
             let found = msg.match(re);
             if (found == null || found.length < 2) {
-                throw "unknown song: " + msg;
+                return;
             }
             let filename = found[1];
             found = self.videos.find(elem => elem.filename == filename);
