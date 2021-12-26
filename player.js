@@ -70,6 +70,8 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=
         console.log("mpd ready");
         self.mpd_ready = true;
         self.mpd_update_state();
+        self.mpd_command('random', ['1'])
+        self.mpd_command('repeat', ['1'])
     });
 
     this.mpd.on('system-player', function(name) {
