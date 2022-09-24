@@ -53,7 +53,12 @@ function downloader() {
         const url = "https://youtu.be/" + id;
         const cmd = 'youtube-dl -g ' + url;
         exec(cmd, function (err, stdout, stderr) {
-            if (err) throw err;
+            if (err) {
+                console.log('download failed', err);
+                self.downloading -= 1;
+                callback(id, title, false);
+                return;
+            }
             const lines = stdout.split(/\r?\n/).filter(function(line) {
                 return line.length != 0;
             });
