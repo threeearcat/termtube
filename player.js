@@ -155,6 +155,11 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=
                              return;
                          }
                          stdout = stdout.trim();
+						 console.log(stdout);
+						 if (stdout.length == 0) {
+							 console.log("URL is broken", URL);
+							 return;
+						 }
                          self.mpd_command('add', [stdout]);
                      });
             });
