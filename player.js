@@ -4,10 +4,9 @@ const unix = require(__dirname + '/unix');
 const mpd = require('mpd');
 
 const commandSockDef = '/tmp/command.sock';
-const titleSockDef = '/tmp/title.sock';
 const lofiURLFileDef = process.env.HOME + '/.mpd/lofi.lst';
 
-function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=lofiURLFileDef) {
+function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef) {
     let self = this;
     this.videos = [];
     this.mode = 'likes';
@@ -31,12 +30,22 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=
         host: 'localhost',
     });
 
+    this._print_title = function(title) {
+		title = title.trim();
+        console.log("Title: " + title);
+		path = process.env.HOME + '/.mpd/current_title';
+		fs.writeFile(path, title, function (err) {
+			if (err) return console.log(err);
+		});
+    }
+
     this.print_title = function() {
         self.mpd_command('currentsong', [], function(err, msg) {
             if (err) throw err;
             const re = /^file: ([a-z0-9\.\-\_]*)$/im;
             let found = msg.match(re);
             if (found == null || found.length < 2) {
+                self._print_title("Unknown title");
                 return;
             }
             let filename = found[1];
@@ -45,10 +54,7 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=
             if (found != undefined) {
                 towrite = found.title;
             }
-            console.log(towrite);
-            if (self.client) {
-                self.client.write(towrite);
-            }
+            self._print_title(towrite);
         });
     }
 
@@ -122,6 +128,7 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=
         } else {
             self.stop();
         }
+
     }
 
     this.reload = function() {
@@ -155,11 +162,11 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=
                              return;
                          }
                          stdout = stdout.trim();
-						 console.log(stdout);
-						 if (stdout.length == 0) {
-							 console.log("URL is broken", URL);
-							 return;
-						 }
+                         console.log(stdout);
+                         if (stdout.length == 0) {
+                             console.log("URL is broken", URL);
+                             return;
+                         }
                          self.mpd_command('add', [stdout]);
                      });
             });
@@ -179,7 +186,6 @@ function player(commandSock=commandSockDef, titleSock=titleSockDef, lofiURLFile=
 
     // Launch sockets
     this.handler = unix.handler(self.emitter, commandSock);
-    this.client = unix.client(titleSock);
 
     // Now we are ready
     return this

@@ -5,6 +5,7 @@ function handler(obj, sockpath) {
     var server = net.createServer(function (s) { _handler(server, s, obj); })
         .on('error', function(e) { trycleanup(e, server, sockpath); });
     _listen(server, sockpath);
+	return server;
 }
 
 function _handler(server, stream, obj) {
