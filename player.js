@@ -45,7 +45,11 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef) {
             const re = /^file: ([a-z0-9\.\-\_]*)$/im;
             let found = msg.match(re);
             if (found == null || found.length < 2) {
-                self._print_title("Unknown title");
+				if (self.mode == 'lofi') {
+					self._print_title("Playing lofi music");
+				} else {
+					self._print_title("Unknown title");
+				}
                 return;
             }
             let filename = found[1];
