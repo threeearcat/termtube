@@ -2,9 +2,13 @@ var net = require('net');
 const fs = require('fs');
 
 function handler(obj, sockpath) {
-    var server = net.createServer(function (s) { _handler(server, s, obj); })
-        .on('error', function(e) { trycleanup(e, server, sockpath); });
-    _listen(server, sockpath);
+    var server = net.createServer(function (s) {
+		_handler(server, s, obj);
+	}).on('error', function(e) {
+		console.log(e);
+		trycleanup(e, server, sockpath);
+	});
+	_listen(server, sockpath);
 	return server;
 }
 
@@ -35,7 +39,7 @@ function trycleanup(e, server, sockpath) {
         _quit();
     }
 
-    console.log('address is is use');
+    console.log('address is in use');
 
     var clientSocket = new net.Socket();
     clientSocket.on('error', function(e) {

@@ -26,8 +26,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef) {
     this.mpd_state = 'stop';
     this.cmd = mpd.cmd;
     this.mpd = mpd.connect({
-        port: 6600,
-        host: 'localhost',
+		path: process.env.HOME+ "/.mpd/socket"
     });
 
     this._print_title = function(title) {
