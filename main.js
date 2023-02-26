@@ -5,6 +5,7 @@ const auth = require(__dirname + "/auth.js");
 const {google} = require('googleapis');
 const {player} = require(__dirname + '/player');
 const {downloader} = require(__dirname + '/downloader');
+const notifier = require('node-notifier');
 
 let p = new player();
 let d = new downloader();
@@ -44,7 +45,15 @@ function retrieve_video(auth, callback, token) {
             timeout = 600;
         }
         setTimeout(retrieve_video, timeout * 1000, auth, callback, token);
-    }).catch(function(err) { console.error("Execute error", err); });
+    }).catch(function(err) {
+		console.error("Execute error", err);
+		if (err.response.data.error == "invalid_grant") {
+			notifier.notify({
+				title: "Termtube",
+				message: "OAuth token is expired. Need to re-authenticate."
+			});
+		}
+	});
 }
 
 function auth_callback(auth) {
