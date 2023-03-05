@@ -11,6 +11,7 @@ let p = new player();
 let d = new downloader();
 
 const have_path = process.env.HOME + '/.mpd/music/have.json';
+const app_name = "Termtube"
 
 let have = [];
 if (fs.existsSync(have_path)) {
@@ -18,6 +19,22 @@ if (fs.existsSync(have_path)) {
     const json = buf.toString()
     have = JSON.parse(json);
 }
+
+function exit_callback(options, exitCode) {
+    if (exitCode || exitCode === 0) console.log(`ExitCode ${exitCode}`);
+    if (options.exit) {
+        notifier.notify({
+            title: app_name,
+            message: "Exiting...",
+        });
+        process.exit();
+    }
+}
+
+const others = [`SIGINT`, `SIGUSR1`, `SIGUSR2`, `uncaughtException`, `SIGTERM`]
+others.forEach((eventType) => {
+    process.on(eventType, exit_callback.bind(null, { exit: true }));
+})
 
 function retrieve_video(auth, callback, token) {
     console.log("Retrieving videos", token);
@@ -49,7 +66,7 @@ function retrieve_video(auth, callback, token) {
 		console.error("Execute error", err);
 		if (err.response.data.error == "invalid_grant") {
 			notifier.notify({
-				title: "Termtube",
+				title: app_name,
 				message: "OAuth token is expired. Need to re-authenticate."
 			});
 		}
