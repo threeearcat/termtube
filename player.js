@@ -158,20 +158,24 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef) {
                     return;
                 console.log('adding URL', URL);
                 const exec = require('child_process').exec;
-                exec('youtube-dl -g ' + URL + ' | tail -n 1',
-                     function (err, stdout, stderr) {
-                         if (err) {
-                             console.log(err);
-                             return;
-                         }
-                         stdout = stdout.trim();
-                         console.log(stdout);
-                         if (stdout.length == 0) {
-                             console.log("URL is broken", URL);
-                             return;
-                         }
-                         self.mpd_command('add', [stdout]);
-                     });
+				// TODO: refactoring to use downloader
+				// yt_downloader = 'youtube-dl';
+				yt_downloader = 'yt-dlp';
+				cmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
+				console.log(cmd);
+                exec(cmd, function (err, stdout, stderr) {
+                    if (err) {
+                        console.log(err);
+                        return;
+                    }
+                    stdout = stdout.trim();
+                    console.log(stdout);
+                    if (stdout.length == 0) {
+                        console.log("URL is broken", URL);
+                        return;
+                    }
+                    self.mpd_command('add', [stdout]);
+                });
             });
         } else {
             console.log('change mode to likes');
