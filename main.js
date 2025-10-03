@@ -10,7 +10,7 @@ const notifier = require('node-notifier');
 let p = new player();
 let d = new downloader();
 
-const have_path = process.env.HOME + '/.mpd/music/have.json';
+const have_path = process.env.HOME + '/.music/downloaded.json';
 const app_name = "Termtube"
 
 let have = [];

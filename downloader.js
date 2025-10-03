@@ -39,7 +39,7 @@ function downloader() {
             setTimeout(self.__download, 60 * 1000, id, title, callback);
             return;
         }
-        const dest = process.env.HOME+'/.mpd/music/'+id+'.webm';
+        const dest = process.env.HOME+'/.music/'+id+'.webm';
         self.downloading += 1;
         if(fs.existsSync(dest)) {
             self.downloading -= 1;
