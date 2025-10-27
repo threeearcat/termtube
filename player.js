@@ -5,8 +5,9 @@ const mpd = require('mpd');
 
 const commandSockDef = '/tmp/command.sock';
 const lofiURLFileDef = process.env.HOME + '/.mpd/lofi.lst';
+const calmJazzPlaylistDef = 'https://www.youtube.com/playlist?list=PL8UB6m7m57w7ZNqD7cSHa4dpURzNG0N0o';
 
-function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef) {
+function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazzPlaylist=calmJazzPlaylistDef) {
     let self = this;
     this.videos = [];
     this.mode = 'likes';
@@ -20,6 +21,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef) {
         console.log('failed to read the lofi URLs', lofiURLFile);
         this.lofiURLs = [];
     }
+    this.calmJazzPlaylist = calmJazzPlaylist;
 
     // MPD's attributes
     this.mpd_ready = false;
@@ -46,6 +48,8 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef) {
             if (found == null || found.length < 2) {
 				if (self.mode == 'lofi') {
 					self._print_title("Playing lofi music");
+				} else if (self.mode == 'calm-jazz') {
+					self._print_title("Playing calm jazz");
 				} else {
 					self._print_title("Unknown title");
 				}
@@ -175,6 +179,40 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef) {
                         return;
                     }
                     self.mpd_command('add', [stdout]);
+                });
+            });
+        } else if (self.mode == 'lofi') {
+            console.log('change mode to calm-jazz');
+            self.mode = 'calm-jazz';
+            self.mpd_command('clear');
+            const exec = require('child_process').exec;
+            const yt_downloader = 'yt-dlp';
+            const cmd = yt_downloader + ' --flat-playlist --get-url ' + self.calmJazzPlaylist;
+            console.log(cmd);
+            exec(cmd, function (err, stdout, stderr) {
+                if (err) {
+                    console.log(err);
+                    return;
+                }
+                const videoURLs = stdout.trim().split('\n');
+                videoURLs.forEach(function(URL) {
+                    if (URL.length == 0)
+                        return;
+                    console.log('adding video URL', URL);
+                    const streamCmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
+                    exec(streamCmd, function (err, stdout, stderr) {
+                        if (err) {
+                            console.log(err);
+                            return;
+                        }
+                        stdout = stdout.trim();
+                        console.log(stdout);
+                        if (stdout.length == 0) {
+                            console.log("URL is broken", URL);
+                            return;
+                        }
+                        self.mpd_command('add', [stdout]);
+                    });
                 });
             });
         } else {
