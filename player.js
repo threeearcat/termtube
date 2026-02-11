@@ -5,12 +5,13 @@ const mpd = require('mpd');
 
 const commandSockDef = '/tmp/command.sock';
 const lofiURLFileDef = process.env.HOME + '/.mpd/lofi.lst';
-const calmJazzPlaylistDef = 'https://www.youtube.com/playlist?list=PL8UB6m7m57w7ZNqD7cSHa4dpURzNG0N0o';
+const calmJazzPlaylistDef = 'https://www.youtube.com/playlist?list=PL61ZikC3WfojSgt1PeWLSzj9qqXpVpCfA';
 
 function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazzPlaylist=calmJazzPlaylistDef) {
     let self = this;
     this.videos = [];
     this.mode = 'likes';
+    this.current_title = '';
 
     // Player's attributes
     this.emitter = new EventEmitter();
@@ -34,10 +35,12 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     this._print_title = function(title) {
 		title = title.trim();
         console.log("Title: " + title);
+		self.current_title = title;
 		path = process.env.HOME + '/.mpd/current_title';
 		fs.writeFile(path, title, function (err) {
 			if (err) return console.log(err);
 		});
+		self.emitter.emit('title-changed', title);
     }
 
     this.print_title = function() {
@@ -104,6 +107,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
             return;
         }
         self.videos.push({'title': title, 'filename': filename});
+        self.emitter.emit('playlist-changed', self.videos);
         self.mpd_command('update')
         if (self.mode == 'likes')
             self.mpd_command('add', [filename])
@@ -127,6 +131,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     this.mpd_set_state = function(state) {
         console.log('change the state to ', state);
         self.mpd_state = state;
+        self.emitter.emit('state-changed', self.getState());
     }
 
     this.startstop = function() {
@@ -156,6 +161,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         if (self.mode == 'likes') {
             console.log('change mode to lofi');
             self.mode = 'lofi';
+            self.emitter.emit('state-changed', self.getState());
             self.mpd_command('clear');
             self.lofiURLs.forEach(function(URL) {
                 if (URL.length == 0)
@@ -184,6 +190,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         } else if (self.mode == 'lofi') {
             console.log('change mode to calm-jazz');
             self.mode = 'calm-jazz';
+            self.emitter.emit('state-changed', self.getState());
             self.mpd_command('clear');
             const exec = require('child_process').exec;
             const yt_downloader = 'yt-dlp';
@@ -218,8 +225,18 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         } else {
             console.log('change mode to likes');
             self.mode = 'likes';
+            self.emitter.emit('state-changed', self.getState());
             self.reload();
         }
+    }
+
+    this.getState = function() {
+        return {
+            mode: self.mode,
+            state: self.mpd_state,
+            title: self.current_title,
+            videos: self.videos
+        };
     }
 
     // Register event handlers
