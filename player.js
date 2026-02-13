@@ -143,13 +143,13 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     }
 
     this.reload = function() {
+        self.mode = 'likes';
+        self.emitter.emit('state-changed', self.getState());
         self.mpd_command('clear');
         self.mpd_command('update');
-        if (self.mode == 'likes') {
-            self.videos.forEach(function (video) {
-                self.mpd_command('add', [video.filename]);
-            });
-        }
+        self.videos.forEach(function (video) {
+            self.mpd_command('add', [video.filename]);
+        });
     }
 
     this.next = function() {
