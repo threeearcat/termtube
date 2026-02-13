@@ -4,9 +4,31 @@ const fs = require('fs');
 const auth = require(__dirname + "/auth.js");
 const {google} = require('googleapis');
 const notifier = require('node-notifier');
+const { validate } = require(__dirname + '/downloader');
 
 const have_path = process.env.HOME + '/.music/downloaded.json';
+const music_dir = process.env.HOME + '/.music/';
 const app_name = "Termtube"
+
+function cleanup_broken_files(have) {
+    const clean = [];
+    const checks = have.map(function(entry) {
+        const filepath = music_dir + entry.id + '.webm';
+        return validate(filepath).then(function() {
+            clean.push(entry);
+        }).catch(function(err) {
+            console.log('removing broken file:', entry.title, '(' + err + ')');
+            try { fs.unlinkSync(filepath); } catch(_) {}
+        });
+    });
+    return Promise.all(checks).then(function() {
+        if (clean.length !== have.length) {
+            console.log('cleaned up', have.length - clean.length, 'broken files');
+            fs.writeFileSync(have_path, JSON.stringify(clean));
+        }
+        return clean;
+    });
+}
 
 function start(p, d) {
     let have = [];
@@ -15,6 +37,14 @@ function start(p, d) {
         const json = buf.toString()
         have = JSON.parse(json);
     }
+
+    cleanup_broken_files(have).then(function(clean) {
+        have = clean;
+        _start(p, d, have);
+    });
+}
+
+function _start(p, d, have) {
 
     function exit_callback(options, exitCode) {
         if (exitCode || exitCode === 0) console.log(`ExitCode ${exitCode}`);
@@ -106,3 +136,4 @@ function start(p, d) {
 }
 
 module.exports = { start };
+

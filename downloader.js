@@ -1,7 +1,25 @@
 const https = require('https');
 const fs = require('fs');
+const { exec } = require('child_process');
 
 const MAX_DOWNLOADING = 10;
+
+function validate(filepath) {
+    return new Promise((resolve, reject) => {
+        exec('ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 ' + JSON.stringify(filepath), function(err, stdout, stderr) {
+            if (err) {
+                reject('ffprobe failed: ' + err.message);
+                return;
+            }
+            const duration = parseFloat(stdout.trim());
+            if (isNaN(duration) || duration <= 0) {
+                reject('invalid duration: ' + stdout.trim());
+                return;
+            }
+            resolve(duration);
+        });
+    });
+}
 
 function download(url, dest) {
     return new Promise((resolve, reject) => {
@@ -88,4 +106,4 @@ function downloader() {
     }
 }
 
-module.exports.downloader = downloader
+module.exports = { downloader, validate }
