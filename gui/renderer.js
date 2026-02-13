@@ -24,11 +24,36 @@ btnMode.addEventListener('click', () => {
     window.termtube.playerAction('mode-change');
 });
 
+// Mode selector dropdown
+const modeSelector = document.getElementById('mode-selector');
+const modeDropdown = document.getElementById('mode-dropdown');
+
+modeBadge.addEventListener('click', () => {
+    modeDropdown.classList.toggle('hidden');
+});
+
+document.querySelectorAll('.mode-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.termtube.setMode(opt.dataset.mode);
+        modeDropdown.classList.add('hidden');
+    });
+});
+
+document.addEventListener('click', (e) => {
+    if (!modeSelector.contains(e.target)) {
+        modeDropdown.classList.add('hidden');
+    }
+});
+
 function updateState(state) {
     if (!state) return;
 
     // Mode
     modeBadge.textContent = state.mode;
+    document.querySelectorAll('.mode-option').forEach(opt => {
+        opt.classList.toggle('active', opt.dataset.mode === state.mode);
+    });
 
     // Play state indicator
     stateIndicator.className = '';

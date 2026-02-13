@@ -9,7 +9,14 @@
 <body>
     <div id="titlebar">
         <span id="app-title">TermTube</span>
-        <span id="mode-badge">likes</span>
+        <div id="mode-selector">
+            <span id="mode-badge">likes</span>
+            <div id="mode-dropdown" class="hidden">
+                <div class="mode-option" data-mode="likes">likes</div>
+                <div class="mode-option" data-mode="lofi">lofi</div>
+                <div class="mode-option" data-mode="calm-jazz">calm-jazz</div>
+            </div>
+        </div>
     </div>
 
     <div id="now-playing">

@@ -29,18 +29,18 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     this.mpd_state = 'stop';
     this.cmd = mpd.cmd;
     this.mpd = mpd.connect({
-		path: process.env.HOME+ "/.mpd/socket"
+        path: process.env.HOME+ "/.mpd/socket"
     });
 
     this._print_title = function(title) {
-		title = title.trim();
+        title = title.trim();
         console.log("Title: " + title);
-		self.current_title = title;
-		const path = process.env.HOME + '/.mpd/current_title';
-		fs.writeFile(path, title, function (err) {
-			if (err) return console.log(err);
-		});
-		self.emitter.emit('title-changed', title);
+        self.current_title = title;
+        const path = process.env.HOME + '/.mpd/current_title';
+        fs.writeFile(path, title, function (err) {
+            if (err) return console.log(err);
+        });
+        self.emitter.emit('title-changed', title);
     }
 
     this.print_title = function() {
@@ -49,13 +49,13 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
             const re = /^file: ([a-z0-9\.\-\_]*)$/im;
             let found = msg.match(re);
             if (found == null || found.length < 2) {
-				if (self.mode == 'lofi') {
-					self._print_title("Playing lofi music");
-				} else if (self.mode == 'calm-jazz') {
-					self._print_title("Playing calm jazz");
-				} else {
-					self._print_title("Unknown title");
-				}
+                if (self.mode == 'lofi') {
+                    self._print_title("Playing lofi music");
+                } else if (self.mode == 'calm-jazz') {
+                    self._print_title("Playing calm jazz");
+                } else {
+                    self._print_title("Unknown title");
+                }
                 return;
             }
             let filename = found[1];
@@ -140,7 +140,6 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         } else {
             self.stop();
         }
-
     }
 
     this.reload = function() {
@@ -168,67 +167,90 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         });
     }
 
-    this.mode_change = function() {
-        if (self.mode == 'likes') {
-            console.log('change mode to lofi');
-            self.mode = 'lofi';
-            self.emitter.emit('state-changed', self.getState());
-            self.mpd_command('clear');
-            self.lofiURLs.forEach(function(URL) {
+    this._switch_to_lofi = function() {
+        console.log('change mode to lofi');
+        self.mode = 'lofi';
+        self.emitter.emit('state-changed', self.getState());
+        self.mpd_command('clear');
+        self.lofiURLs.forEach(function(URL) {
+            if (URL.length == 0)
+                return;
+            const exec = require('child_process').exec;
+            const yt_downloader = 'yt-dlp';
+            const cmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
+            exec(cmd, function (err, stdout, stderr) {
+                if (err) {
+                    console.log('lofi stream error:', URL);
+                    return;
+                }
+                stdout = stdout.trim();
+                if (stdout.length == 0) {
+                    console.log("URL is broken", URL);
+                    return;
+                }
+                self.mpd_command('add', [stdout]);
+            });
+        });
+    }
+
+    this._switch_to_calmjazz = function() {
+        console.log('change mode to calm-jazz');
+        self.mode = 'calm-jazz';
+        self.emitter.emit('state-changed', self.getState());
+        self.mpd_command('clear');
+        const exec = require('child_process').exec;
+        const yt_downloader = 'yt-dlp';
+        const cmd = yt_downloader + ' --flat-playlist --get-url ' + self.calmJazzPlaylist;
+        exec(cmd, function (err, stdout, stderr) {
+            if (err) {
+                console.log('calm-jazz playlist error');
+                return;
+            }
+            const videoURLs = stdout.trim().split('\n');
+            console.log('calm-jazz: loading', videoURLs.length, 'tracks');
+            videoURLs.forEach(function(URL) {
                 if (URL.length == 0)
                     return;
-                const exec = require('child_process').exec;
-				const yt_downloader = 'yt-dlp';
-				const cmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
-                exec(cmd, function (err, stdout, stderr) {
+                const streamCmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
+                exec(streamCmd, function (err, stdout, stderr) {
                     if (err) {
-                        console.log('lofi stream error:', URL);
                         return;
                     }
                     stdout = stdout.trim();
                     if (stdout.length == 0) {
-                        console.log("URL is broken", URL);
                         return;
                     }
                     self.mpd_command('add', [stdout]);
                 });
             });
+        });
+    }
+
+    this._switch_to_likes = function() {
+        console.log('change mode to likes');
+        self.mode = 'likes';
+        self.emitter.emit('state-changed', self.getState());
+        self.reload();
+    }
+
+    this.mode_change = function() {
+        if (self.mode == 'likes') {
+            self._switch_to_lofi();
         } else if (self.mode == 'lofi') {
-            console.log('change mode to calm-jazz');
-            self.mode = 'calm-jazz';
-            self.emitter.emit('state-changed', self.getState());
-            self.mpd_command('clear');
-            const exec = require('child_process').exec;
-            const yt_downloader = 'yt-dlp';
-            const cmd = yt_downloader + ' --flat-playlist --get-url ' + self.calmJazzPlaylist;
-            exec(cmd, function (err, stdout, stderr) {
-                if (err) {
-                    console.log('calm-jazz playlist error');
-                    return;
-                }
-                const videoURLs = stdout.trim().split('\n');
-                console.log('calm-jazz: loading', videoURLs.length, 'tracks');
-                videoURLs.forEach(function(URL) {
-                    if (URL.length == 0)
-                        return;
-                    const streamCmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
-                    exec(streamCmd, function (err, stdout, stderr) {
-                        if (err) {
-                            return;
-                        }
-                        stdout = stdout.trim();
-                        if (stdout.length == 0) {
-                            return;
-                        }
-                        self.mpd_command('add', [stdout]);
-                    });
-                });
-            });
+            self._switch_to_calmjazz();
         } else {
-            console.log('change mode to likes');
-            self.mode = 'likes';
-            self.emitter.emit('state-changed', self.getState());
-            self.reload();
+            self._switch_to_likes();
+        }
+    }
+
+    this.set_mode = function(target) {
+        if (target == self.mode) return;
+        if (target == 'lofi') {
+            self._switch_to_lofi();
+        } else if (target == 'calm-jazz') {
+            self._switch_to_calmjazz();
+        } else {
+            self._switch_to_likes();
         }
     }
 
@@ -247,6 +269,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     this.emitter.on('reload', self.reload);
     this.emitter.on('next', self.next);
     this.emitter.on('mode-change', self.mode_change);
+    this.emitter.on('set-mode', self.set_mode);
     this.emitter.on('play-track', self.play_track);
 
     // Launch sockets

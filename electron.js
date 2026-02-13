@@ -17,7 +17,7 @@ function createWindow() {
         frame: false,
         show: false,
         resizable: true,
-        backgroundColor: '#1a1a2e',
+        backgroundColor: '#2a2a3e',
         webPreferences: {
             preload: path.join(__dirname, 'gui', 'preload.js'),
             contextIsolation: true,
@@ -44,6 +44,10 @@ ipcMain.on('player-action', (event, action) => {
 
 ipcMain.on('play-track', (event, filename) => {
     p.emitter.emit('play-track', filename);
+});
+
+ipcMain.on('set-mode', (event, mode) => {
+    p.emitter.emit('set-mode', mode);
 });
 
 // Forward player events to renderer

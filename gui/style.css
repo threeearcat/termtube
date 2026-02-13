@@ -6,8 +6,8 @@
 
 body {
     font-family: -apple-system, 'Segoe UI', 'Noto Sans', sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
+    background: #2a2a3e;
+    color: #e8e8e8;
     overflow: hidden;
     height: 100vh;
     display: flex;
@@ -27,20 +27,64 @@ body {
 #app-title {
     font-size: 13px;
     font-weight: 600;
-    color: #888;
+    color: #999;
     letter-spacing: 1px;
     text-transform: uppercase;
+}
+
+#mode-selector {
+    position: relative;
+    -webkit-app-region: no-drag;
 }
 
 #mode-badge {
     font-size: 11px;
     padding: 3px 10px;
     border-radius: 12px;
-    background: #16213e;
+    background: #363650;
     color: #e94560;
     font-weight: 600;
     letter-spacing: 0.5px;
-    -webkit-app-region: no-drag;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+#mode-badge:hover {
+    background: #444466;
+}
+
+#mode-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 6px;
+    background: #363650;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    z-index: 100;
+    min-width: 120px;
+}
+
+#mode-dropdown.hidden {
+    display: none;
+}
+
+.mode-option {
+    padding: 8px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #bbb;
+    transition: background 0.15s;
+}
+
+.mode-option:hover {
+    background: #444466;
+}
+
+.mode-option.active {
+    color: #e94560;
+    font-weight: 600;
 }
 
 #now-playing {
@@ -53,7 +97,7 @@ body {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #444;
+    background: #555;
     margin: 0 auto 10px;
     transition: background 0.3s;
 }
@@ -71,7 +115,7 @@ body {
     font-size: 16px;
     font-weight: 500;
     line-height: 1.4;
-    color: #f0f0f0;
+    color: #f5f5f5;
     max-height: 2.8em;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -90,7 +134,7 @@ body {
 }
 
 .ctrl-btn {
-    background: #16213e;
+    background: #363650;
     border: none;
     color: #ccc;
     width: 42px;
@@ -104,7 +148,7 @@ body {
 }
 
 .ctrl-btn:hover {
-    background: #0f3460;
+    background: #444466;
     color: #fff;
 }
 
@@ -133,21 +177,21 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: 8px 16px;
-    border-top: 1px solid #16213e;
+    border-top: 1px solid #363650;
     flex-shrink: 0;
 }
 
 #playlist-header span:first-child {
     font-size: 12px;
     font-weight: 600;
-    color: #666;
+    color: #888;
     text-transform: uppercase;
     letter-spacing: 1px;
 }
 
 #playlist-count {
     font-size: 11px;
-    color: #555;
+    color: #777;
 }
 
 #playlist {
@@ -165,14 +209,14 @@ body {
 }
 
 #playlist::-webkit-scrollbar-thumb {
-    background: #333;
+    background: #4a4a6a;
     border-radius: 2px;
 }
 
 .playlist-item {
     padding: 8px 10px;
     font-size: 13px;
-    color: #999;
+    color: #aaa;
     border-radius: 6px;
     cursor: default;
     white-space: nowrap;
@@ -182,11 +226,11 @@ body {
 }
 
 .playlist-item:hover {
-    background: #16213e;
+    background: #363650;
 }
 
 .playlist-item.active {
     color: #e94560;
-    background: #16213e;
+    background: #363650;
     font-weight: 500;
 }
