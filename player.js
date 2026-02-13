@@ -177,20 +177,15 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
             self.lofiURLs.forEach(function(URL) {
                 if (URL.length == 0)
                     return;
-                console.log('adding URL', URL);
                 const exec = require('child_process').exec;
-				// TODO: refactoring to use downloader
-				// yt_downloader = 'youtube-dl';
 				yt_downloader = 'yt-dlp';
 				cmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
-				console.log(cmd);
                 exec(cmd, function (err, stdout, stderr) {
                     if (err) {
-                        console.log(err);
+                        console.log('lofi stream error:', URL);
                         return;
                     }
                     stdout = stdout.trim();
-                    console.log(stdout);
                     if (stdout.length == 0) {
                         console.log("URL is broken", URL);
                         return;
@@ -206,27 +201,23 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
             const exec = require('child_process').exec;
             const yt_downloader = 'yt-dlp';
             const cmd = yt_downloader + ' --flat-playlist --get-url ' + self.calmJazzPlaylist;
-            console.log(cmd);
             exec(cmd, function (err, stdout, stderr) {
                 if (err) {
-                    console.log(err);
+                    console.log('calm-jazz playlist error');
                     return;
                 }
                 const videoURLs = stdout.trim().split('\n');
+                console.log('calm-jazz: loading', videoURLs.length, 'tracks');
                 videoURLs.forEach(function(URL) {
                     if (URL.length == 0)
                         return;
-                    console.log('adding video URL', URL);
                     const streamCmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
                     exec(streamCmd, function (err, stdout, stderr) {
                         if (err) {
-                            console.log(err);
                             return;
                         }
                         stdout = stdout.trim();
-                        console.log(stdout);
                         if (stdout.length == 0) {
-                            console.log("URL is broken", URL);
                             return;
                         }
                         self.mpd_command('add', [stdout]);
