@@ -36,7 +36,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
 		title = title.trim();
         console.log("Title: " + title);
 		self.current_title = title;
-		path = process.env.HOME + '/.mpd/current_title';
+		const path = process.env.HOME + '/.mpd/current_title';
 		fs.writeFile(path, title, function (err) {
 			if (err) return console.log(err);
 		});
@@ -72,7 +72,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         self.mpd_command("status", [], function(err, msg) {
             if (err) throw err;
             const re = /^state: ([a-z]*)$/im;
-            found = msg.match(re);
+            let found = msg.match(re);
             if (found == null || found.length < 2) {
                 self.mpd_set_state('stop');
             } else {
@@ -102,7 +102,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     }
 
     this.add = function(id, title) {
-        filename = id + '.webm';
+        const filename = id + '.webm';
         if (self.videos.findIndex(elem => elem.filename == filename) != -1) {
             return;
         }
@@ -178,8 +178,8 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
                 if (URL.length == 0)
                     return;
                 const exec = require('child_process').exec;
-				yt_downloader = 'yt-dlp';
-				cmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
+				const yt_downloader = 'yt-dlp';
+				const cmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
                 exec(cmd, function (err, stdout, stderr) {
                     if (err) {
                         console.log('lofi stream error:', URL);

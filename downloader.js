@@ -49,7 +49,7 @@ function download(url, dest) {
 }
 
 function downloader() {
-    self = this;
+    let self = this;
     this.downloading = 0;
 
     this.__download = function(id, title, callback) {

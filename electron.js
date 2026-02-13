@@ -27,8 +27,9 @@ function createWindow() {
 
     mainWindow.loadFile(path.join(__dirname, 'gui', 'index.html'));
 
-    mainWindow.on('closed', function () {
-        mainWindow = null;
+    mainWindow.on('close', function (e) {
+        e.preventDefault();
+        mainWindow.hide();
     });
 }
 
@@ -70,10 +71,6 @@ p.emitter.on('toggle', () => {
 app.whenReady().then(() => {
     createWindow();
     backend.start(p, d);
-});
-
-app.on('window-all-closed', () => {
-    app.quit();
 });
 
 app.on('activate', () => {
