@@ -41,6 +41,10 @@ ipcMain.on('player-action', (event, action) => {
     p.emitter.emit(action);
 });
 
+ipcMain.on('play-track', (event, filename) => {
+    p.emitter.emit('play-track', filename);
+});
+
 // Forward player events to renderer
 function forwardToRenderer(channel, data) {
     if (mainWindow && !mainWindow.isDestroyed()) {

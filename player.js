@@ -157,6 +157,17 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         self.mpd.sendCommand('next');
     }
 
+    this.play_track = function(filename) {
+        self.mpd_command('playlistfind', ['file', filename], function(err, msg) {
+            if (err) return;
+            const re = /^Pos: (\d+)$/im;
+            const found = msg.match(re);
+            if (found && found.length >= 2) {
+                self.mpd_command('play', [found[1]]);
+            }
+        });
+    }
+
     this.mode_change = function() {
         if (self.mode == 'likes') {
             console.log('change mode to lofi');
@@ -245,6 +256,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     this.emitter.on('reload', self.reload);
     this.emitter.on('next', self.next);
     this.emitter.on('mode-change', self.mode_change);
+    this.emitter.on('play-track', self.play_track);
 
     // Launch sockets
     this.handler = unix.handler(self.emitter, commandSock);

@@ -69,6 +69,10 @@ function updatePlaylist(videos) {
         item.className = 'playlist-item';
         item.textContent = video.title;
         item.title = video.title;
+        item.dataset.filename = video.filename;
+        item.addEventListener('click', function() {
+            window.termtube.playTrack(video.filename);
+        });
         playlistEl.appendChild(item);
     });
 }
