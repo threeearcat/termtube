@@ -15,6 +15,7 @@ function createWindow() {
         width: 400,
         height: 600,
         frame: false,
+        show: false,
         resizable: true,
         backgroundColor: '#1a1a2e',
         webPreferences: {
