@@ -154,7 +154,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     }
 
     this.next = function() {
-        self.mpd.sendCommand('next');
+        self.mpd_command('next');
     }
 
     this.play_track = function(filename) {

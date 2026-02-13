@@ -16,7 +16,7 @@ function _handler(server, stream, obj) {
     // console.log('_handler', stream);
     console.log('connected');
     stream.on('data', function(c) {
-        cmds = c.toString()
+        const cmds = c.toString()
         // Handle (backslash + comma)-separated commands
         cmds.split('\\,').forEach(c => {
             _handleCommand(c, obj);
@@ -26,7 +26,7 @@ function _handler(server, stream, obj) {
 
 function _handleCommand(rawCmd, obj) {
     // FIXME: very inefficient
-    [cmd, ...toks] = rawCmd.trim().split(':');
+    const [cmd, ...toks] = rawCmd.trim().split(':');
     const args = toks.join(':')
     console.log('cmd:', cmd, 'args:', args);
     obj.emit(cmd, args);

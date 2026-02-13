@@ -67,10 +67,7 @@ function downloader() {
 
         console.log('downloading', id, title);
 
-		// const yt_downloader = 'youtube-dl';
 		const yt_downloader = 'yt-dlp';
-
-        const exec = require('child_process').exec;
         const url = "https://youtu.be/" + id;
         const cmd = yt_downloader + ' -g ' + url;
         exec(cmd, function (err, stdout, stderr) {
