@@ -62,7 +62,31 @@ function _start(p, d, have) {
         process.on(eventType, exit_callback.bind(null, { exit: true }));
     })
 
+    let likedIds = new Set();
+
+    function prune_unliked() {
+        const removed = [];
+        for (let i = have.length - 1; i >= 0; i--) {
+            if (!likedIds.has(have[i].id)) {
+                const entry = have[i];
+                console.log('Removing unliked track:', entry.title);
+                const filepath = music_dir + entry.id + '.webm';
+                try { fs.unlinkSync(filepath); } catch(_) {}
+                p.remove(entry.id + '.webm');
+                have.splice(i, 1);
+                removed.push(entry.title);
+            }
+        }
+        if (removed.length > 0) {
+            console.log('Pruned', removed.length, 'unliked tracks');
+            fs.writeFileSync(have_path, JSON.stringify(have));
+        }
+    }
+
     function retrieve_video(auth, callback, token) {
+        if (token === '') {
+            likedIds = new Set();
+        }
         console.log("Retrieving videos", token);
         const youtube = google.youtube('v3');
         youtube.videos.list({
@@ -74,6 +98,7 @@ function _start(p, d, have) {
         }).then(function(res) {
             let ids = res.data.items.map(a => a.id);
             console.log("Received IDs", ids);
+            ids.forEach(function(id) { likedIds.add(id); });
             if (callback != undefined) {
                 const videos = res.data.items;
                 videos.forEach(function(video) {
@@ -84,6 +109,7 @@ function _start(p, d, have) {
             var timeout = 1;
             if (typeof token === 'undefined') {
                 console.log("collected all videos");
+                prune_unliked();
                 token = '';
                 timeout = 600;
             }

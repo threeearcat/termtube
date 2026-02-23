@@ -156,6 +156,21 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         self.mpd_command('next');
     }
 
+    this.remove = function(filename) {
+        const idx = self.videos.findIndex(elem => elem.filename == filename);
+        if (idx === -1) return;
+        self.videos.splice(idx, 1);
+        self.emitter.emit('playlist-changed', self.videos);
+        self.mpd_command('playlistfind', ['file', filename], function(err, msg) {
+            if (err) return;
+            const re = /^Id: (\d+)$/im;
+            const found = msg.match(re);
+            if (found && found.length >= 2) {
+                self.mpd_command('deleteid', [found[1]]);
+            }
+        });
+    }
+
     this.play_track = function(filename) {
         self.mpd_command('playlistfind', ['file', filename], function(err, msg) {
             if (err) return;
