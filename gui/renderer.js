@@ -10,6 +10,7 @@ const btnNext = document.getElementById('btn-next');
 const btnMode = document.getElementById('btn-mode');
 const playlistEl = document.getElementById('playlist');
 const playlistCount = document.getElementById('playlist-count');
+const searchInput = document.getElementById('search-input');
 
 // Player actions
 btnPlayPause.addEventListener('click', () => {
@@ -86,6 +87,13 @@ function updateTitle(title) {
     highlightActiveTrack(title);
 }
 
+function applySearchFilter() {
+    const query = searchInput.value.toLowerCase();
+    playlistEl.querySelectorAll('.playlist-item').forEach(function(item) {
+        item.classList.toggle('filter-hidden', query !== '' && !item.textContent.toLowerCase().includes(query));
+    });
+}
+
 function updatePlaylist(videos) {
     playlistCount.textContent = videos.length;
     playlistEl.innerHTML = '';
@@ -100,7 +108,16 @@ function updatePlaylist(videos) {
         });
         playlistEl.appendChild(item);
     });
+    applySearchFilter();
 }
+
+searchInput.addEventListener('input', applySearchFilter);
+searchInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        searchInput.value = '';
+        applySearchFilter();
+    }
+});
 
 function highlightActiveTrack(title) {
     const items = playlistEl.querySelectorAll('.playlist-item');
