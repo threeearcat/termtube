@@ -45,9 +45,45 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this.mpd_ready = false;
     this.mpd_state = 'stop';
     this.cmd = mpd.cmd;
-    this.mpd = mpd.connect({
-        path: process.env.HOME+ "/.mpd/socket"
-    });
+    this._mpdRetries = 0;
+    this._connectMpd = function() {
+        self.mpd_ready = false;
+        self.mpd = mpd.connect({
+            path: process.env.HOME + "/.mpd/socket"
+        });
+        function scheduleReconnect(reason) {
+            self.mpd_ready = false;
+            if (++self._mpdRetries >= 5) {
+                console.log('mpd: giving up after 5 retries');
+                return;
+            }
+            setTimeout(function() {
+                console.log('mpd reconnecting (' + self._mpdRetries + '/5)...');
+                self._connectMpd();
+            }, 2000);
+        }
+        self.mpd.on('error', function(err) {
+            console.log('mpd connection error:', err.message);
+            scheduleReconnect();
+        });
+        self.mpd.on('end', function() {
+            console.log('mpd connection closed');
+            scheduleReconnect();
+        });
+        self.mpd.on('ready', function() {
+            console.log("mpd ready");
+            self.mpd_ready = true;
+            self._mpdRetries = 0;
+            self.mpd_command('stop');
+            self.reload();
+            self.mpd_command('random', ['1']);
+            self.mpd_command('repeat', ['1']);
+        });
+        self.mpd.on('system-player', function() {
+            self.mpd_update_state();
+        });
+    };
+    this._connectMpd();
 
     this._print_title = function(title) {
         title = title.trim();
@@ -62,7 +98,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
 
     this.print_title = function() {
         self.mpd_command('currentsong', [], function(err, msg) {
-            if (err) throw err;
+            if (err) { console.log('currentsong error:', err.message); return; }
             // Try to get the full file URI (works for both local files and URLs)
             const fileRe = /^file: (.+)$/im;
             const fileMatch = msg.match(fileRe);
@@ -98,7 +134,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
 
     this.mpd_update_state = function() {
         self.mpd_command("status", [], function(err, msg) {
-            if (err) throw err;
+            if (err) { console.log('status error:', err.message); return; }
             const re = /^state: ([a-z]*)$/im;
             let found = msg.match(re);
             if (found == null || found.length < 2) {
@@ -110,18 +146,6 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
         });
     }
 
-    this.mpd.on('ready', function() {
-        console.log("mpd ready");
-        self.mpd_ready = true;
-        self.mpd_command('stop');
-        self.reload();
-        self.mpd_command('random', ['1'])
-        self.mpd_command('repeat', ['1'])
-    });
-
-    this.mpd.on('system-player', function(name) {
-        self.mpd_update_state();
-    });
 
     // MPD wrapper
     this.mpd_command = function(cmd, args=[], callback=function () {}) {
