@@ -5,13 +5,17 @@ const mpd = require('mpd');
 
 const commandSockDef = '/tmp/command.sock';
 const lofiURLFileDef = process.env.HOME + '/.mpd/lofi.lst';
-const calmJazzPlaylistDef = 'https://www.youtube.com/playlist?list=PL61ZikC3WfojSgt1PeWLSzj9qqXpVpCfA';
+const playlistsPathDef = process.env.HOME + '/.termtube/playlists.json';
+const defaultPlaylists = [
+    {"name": "calm-jazz", "url": "https://www.youtube.com/playlist?list=PL61ZikC3WfojSgt1PeWLSzj9qqXpVpCfA"}
+];
 
-function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazzPlaylist=calmJazzPlaylistDef) {
+function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlistsPath=playlistsPathDef) {
     let self = this;
     this.videos = [];
     this.mode = 'likes';
     this.current_title = '';
+    this.currentPlaylist = '';
 
     // Player's attributes
     this.emitter = new EventEmitter();
@@ -22,7 +26,17 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         console.log('failed to read the lofi URLs', lofiURLFile);
         this.lofiURLs = [];
     }
-    this.calmJazzPlaylist = calmJazzPlaylist;
+
+    // Load streaming playlists from JSON (migrate if missing)
+    this.playlistsPath = playlistsPath;
+    try {
+        this.playlists = JSON.parse(fs.readFileSync(playlistsPath, 'utf-8'));
+    } catch {
+        const dir = require('path').dirname(playlistsPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        this.playlists = defaultPlaylists.slice();
+        fs.writeFileSync(playlistsPath, JSON.stringify(this.playlists, null, 2));
+    }
 
     // MPD's attributes
     this.mpd_ready = false;
@@ -51,8 +65,8 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
             if (found == null || found.length < 2) {
                 if (self.mode == 'lofi') {
                     self._print_title("Playing lofi music");
-                } else if (self.mode == 'calm-jazz') {
-                    self._print_title("Playing calm jazz");
+                } else if (self.mode == 'stream') {
+                    self._print_title("Playing " + self.currentPlaylist);
                 } else {
                     self._print_title("Unknown title");
                 }
@@ -208,21 +222,26 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         });
     }
 
-    this._switch_to_calmjazz = function() {
-        console.log('change mode to calm-jazz');
-        self.mode = 'calm-jazz';
+    this._switch_to_stream = function(playlist) {
+        if (!playlist) {
+            if (self.playlists.length === 0) return;
+            playlist = self.playlists.find(p => p.name === self.currentPlaylist) || self.playlists[0];
+        }
+        console.log('change mode to stream:', playlist.name);
+        self.mode = 'stream';
+        self.currentPlaylist = playlist.name;
         self.emitter.emit('state-changed', self.getState());
         self.mpd_command('clear');
         const exec = require('child_process').exec;
         const yt_downloader = 'yt-dlp';
-        const cmd = yt_downloader + ' --flat-playlist --get-url ' + self.calmJazzPlaylist;
+        const cmd = yt_downloader + ' --flat-playlist --get-url ' + playlist.url;
         exec(cmd, function (err, stdout, stderr) {
             if (err) {
-                console.log('calm-jazz playlist error');
+                console.log('stream playlist error:', playlist.name);
                 return;
             }
             const videoURLs = stdout.trim().split('\n');
-            console.log('calm-jazz: loading', videoURLs.length, 'tracks');
+            console.log(playlist.name + ': loading', videoURLs.length, 'tracks');
             videoURLs.forEach(function(URL) {
                 if (URL.length == 0)
                     return;
@@ -252,18 +271,24 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
         if (self.mode == 'likes') {
             self._switch_to_lofi();
         } else if (self.mode == 'lofi') {
-            self._switch_to_calmjazz();
+            self._switch_to_stream();
         } else {
             self._switch_to_likes();
         }
     }
 
     this.set_mode = function(target) {
+        if (target.startsWith('stream:')) {
+            const name = target.slice(7);
+            const pl = self.playlists.find(p => p.name === name);
+            if (pl) self._switch_to_stream(pl);
+            return;
+        }
         if (target == self.mode) return;
         if (target == 'lofi') {
             self._switch_to_lofi();
-        } else if (target == 'calm-jazz') {
-            self._switch_to_calmjazz();
+        } else if (target == 'stream') {
+            self._switch_to_stream();
         } else {
             self._switch_to_likes();
         }
@@ -274,8 +299,42 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
             mode: self.mode,
             state: self.mpd_state,
             title: self.current_title,
-            videos: self.videos
+            videos: self.videos,
+            playlists: self.playlists,
+            currentPlaylist: self.currentPlaylist
         };
+    }
+
+    this._savePlaylists = function() {
+        fs.writeFileSync(self.playlistsPath, JSON.stringify(self.playlists, null, 2));
+    }
+
+    this.addPlaylist = function(name, url) {
+        if (self.playlists.find(p => p.name === name)) return;
+        self.playlists.push({ name, url });
+        self._savePlaylists();
+        self.emitter.emit('playlists-changed', self.playlists);
+    }
+
+    this.removePlaylist = function(name) {
+        const idx = self.playlists.findIndex(p => p.name === name);
+        if (idx === -1) return;
+        self.playlists.splice(idx, 1);
+        self._savePlaylists();
+        self.emitter.emit('playlists-changed', self.playlists);
+        if (self.mode === 'stream' && self.currentPlaylist === name) {
+            if (self.playlists.length > 0) {
+                self._switch_to_stream(self.playlists[0]);
+            } else {
+                self._switch_to_likes();
+            }
+        }
+    }
+
+    this.selectPlaylist = function(name) {
+        const pl = self.playlists.find(p => p.name === name);
+        if (!pl) return;
+        self._switch_to_stream(pl);
     }
 
     // Register event handlers
@@ -286,6 +345,9 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, calmJazz
     this.emitter.on('mode-change', self.mode_change);
     this.emitter.on('set-mode', self.set_mode);
     this.emitter.on('play-track', self.play_track);
+    this.emitter.on('add-playlist', function(data) { self.addPlaylist(data.name, data.url); });
+    this.emitter.on('remove-playlist', self.removePlaylist);
+    this.emitter.on('select-playlist', self.selectPlaylist);
 
     // Launch sockets
     this.handler = unix.handler(self.emitter, commandSock);

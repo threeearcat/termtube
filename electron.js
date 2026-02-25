@@ -68,6 +68,18 @@ ipcMain.on('set-mode', (event, mode) => {
     p.emitter.emit('set-mode', mode);
 });
 
+ipcMain.on('add-playlist', (event, data) => {
+    p.emitter.emit('add-playlist', data);
+});
+
+ipcMain.on('remove-playlist', (event, name) => {
+    p.emitter.emit('remove-playlist', name);
+});
+
+ipcMain.on('select-playlist', (event, name) => {
+    p.emitter.emit('select-playlist', name);
+});
+
 // Forward player events to renderer
 function forwardToRenderer(channel, data) {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -78,6 +90,7 @@ function forwardToRenderer(channel, data) {
 p.emitter.on('state-changed', (state) => forwardToRenderer('state-changed', state));
 p.emitter.on('title-changed', (title) => forwardToRenderer('title-changed', title));
 p.emitter.on('playlist-changed', (videos) => forwardToRenderer('playlist-changed', videos));
+p.emitter.on('playlists-changed', (playlists) => forwardToRenderer('playlists-changed', playlists));
 
 // Toggle window visibility via Unix socket command
 p.emitter.on('toggle', () => {

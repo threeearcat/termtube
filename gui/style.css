@@ -259,3 +259,137 @@ body {
     background: #363650;
     font-weight: 500;
 }
+
+/* Stream playlist picker */
+#stream-picker {
+    padding: 8px 16px;
+    border-top: 1px solid #363650;
+    flex-shrink: 0;
+}
+
+#stream-picker.hidden {
+    display: none;
+}
+
+.stream-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.stream-item:hover {
+    background: #363650;
+}
+
+.stream-item.active .stream-label {
+    color: #e94560;
+    font-weight: 600;
+}
+
+.stream-label {
+    font-size: 12px;
+    color: #bbb;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stream-delete {
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    visibility: hidden;
+}
+
+.stream-item:hover .stream-delete {
+    visibility: visible;
+}
+
+.stream-delete:hover {
+    color: #e94560;
+}
+
+#stream-add-btn {
+    display: block;
+    width: 100%;
+    margin-top: 6px;
+    padding: 6px;
+    background: none;
+    border: 1px dashed #444466;
+    border-radius: 6px;
+    color: #777;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+}
+
+#stream-add-btn:hover {
+    border-color: #e94560;
+    color: #e94560;
+}
+
+#stream-add-btn.hidden {
+    display: none;
+}
+
+#stream-add-form {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+
+#stream-add-form.hidden {
+    display: none;
+}
+
+#stream-add-form input {
+    flex: 1;
+    min-width: 80px;
+    padding: 5px 8px;
+    font-size: 12px;
+    color: #e8e8e8;
+    background: #363650;
+    border: 1px solid #444466;
+    border-radius: 4px;
+    outline: none;
+}
+
+#stream-add-form input:focus {
+    border-color: #e94560;
+}
+
+#stream-add-form button {
+    padding: 5px 10px;
+    font-size: 11px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#stream-save {
+    background: #e94560;
+    color: #fff;
+}
+
+#stream-save:hover {
+    background: #d63851;
+}
+
+#stream-cancel {
+    background: #363650;
+    color: #bbb;
+}
+
+#stream-cancel:hover {
+    background: #444466;
+}

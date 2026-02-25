@@ -11,6 +11,17 @@ const btnMode = document.getElementById('btn-mode');
 const playlistEl = document.getElementById('playlist');
 const playlistCount = document.getElementById('playlist-count');
 const searchInput = document.getElementById('search-input');
+const streamPicker = document.getElementById('stream-picker');
+const streamList = document.getElementById('stream-list');
+const streamAddBtn = document.getElementById('stream-add-btn');
+const streamAddForm = document.getElementById('stream-add-form');
+const streamNameInput = document.getElementById('stream-name');
+const streamUrlInput = document.getElementById('stream-url');
+const streamSaveBtn = document.getElementById('stream-save');
+const streamCancelBtn = document.getElementById('stream-cancel');
+
+let cachedPlaylists = [];
+let cachedCurrentPlaylist = '';
 
 // Player actions
 btnPlayPause.addEventListener('click', () => {
@@ -47,14 +58,76 @@ document.addEventListener('click', (e) => {
     }
 });
 
+// Stream picker
+streamAddBtn.addEventListener('click', () => {
+    streamAddForm.classList.remove('hidden');
+    streamAddBtn.classList.add('hidden');
+    streamNameInput.focus();
+});
+
+streamCancelBtn.addEventListener('click', () => {
+    streamAddForm.classList.add('hidden');
+    streamAddBtn.classList.remove('hidden');
+    streamNameInput.value = '';
+    streamUrlInput.value = '';
+});
+
+streamSaveBtn.addEventListener('click', () => {
+    const name = streamNameInput.value.trim();
+    const url = streamUrlInput.value.trim();
+    if (!name || !url) return;
+    window.termtube.addPlaylist(name, url);
+    streamNameInput.value = '';
+    streamUrlInput.value = '';
+    streamAddForm.classList.add('hidden');
+    streamAddBtn.classList.remove('hidden');
+});
+
+function renderStreamList(playlists, currentPlaylist) {
+    streamList.innerHTML = '';
+    playlists.forEach(function(pl) {
+        const item = document.createElement('div');
+        item.className = 'stream-item';
+        if (pl.name === currentPlaylist) item.classList.add('active');
+
+        const label = document.createElement('span');
+        label.className = 'stream-label';
+        label.textContent = pl.name;
+        label.addEventListener('click', function() {
+            window.termtube.selectPlaylist(pl.name);
+        });
+
+        const del = document.createElement('button');
+        del.className = 'stream-delete';
+        del.textContent = '\u00d7';
+        del.title = 'Remove';
+        del.addEventListener('click', function(e) {
+            e.stopPropagation();
+            window.termtube.removePlaylist(pl.name);
+        });
+
+        item.appendChild(label);
+        item.appendChild(del);
+        streamList.appendChild(item);
+    });
+}
+
 function updateState(state) {
     if (!state) return;
 
     // Mode
-    modeBadge.textContent = state.mode;
+    modeBadge.textContent = state.mode === 'stream' ? state.currentPlaylist || 'stream' : state.mode;
     document.querySelectorAll('.mode-option').forEach(opt => {
         opt.classList.toggle('active', opt.dataset.mode === state.mode);
     });
+
+    // Stream picker visibility
+    streamPicker.classList.toggle('hidden', state.mode !== 'stream');
+
+    // Update cached playlists
+    if (state.playlists) cachedPlaylists = state.playlists;
+    if (state.currentPlaylist !== undefined) cachedCurrentPlaylist = state.currentPlaylist;
+    renderStreamList(cachedPlaylists, cachedCurrentPlaylist);
 
     // Play state indicator
     stateIndicator.className = '';
@@ -143,6 +216,10 @@ function highlightActiveTrack(title) {
 window.termtube.onStateChanged(updateState);
 window.termtube.onTitleChanged(updateTitle);
 window.termtube.onPlaylistChanged(updatePlaylist);
+window.termtube.onPlaylistsChanged(function(playlists) {
+    cachedPlaylists = playlists;
+    renderStreamList(cachedPlaylists, cachedCurrentPlaylist);
+});
 
 // Initialize
 window.termtube.getState().then(updateState);
