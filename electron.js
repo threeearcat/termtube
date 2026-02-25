@@ -91,6 +91,7 @@ p.emitter.on('state-changed', (state) => forwardToRenderer('state-changed', stat
 p.emitter.on('title-changed', (title) => forwardToRenderer('title-changed', title));
 p.emitter.on('playlist-changed', (videos) => forwardToRenderer('playlist-changed', videos));
 p.emitter.on('playlists-changed', (playlists) => forwardToRenderer('playlists-changed', playlists));
+p.emitter.on('stream-tracks-changed', (tracks) => forwardToRenderer('stream-tracks-changed', tracks));
 
 // Toggle window visibility via Unix socket command
 p.emitter.on('toggle', () => {

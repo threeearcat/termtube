@@ -16,6 +16,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this.mode = 'likes';
     this.current_title = '';
     this.currentPlaylist = '';
+    this.streamTracks = [];
     this._streamGen = 0;
 
     // Player's attributes
@@ -236,22 +237,28 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
         self.currentPlaylist = playlist.name;
         const gen = ++self._streamGen;
         self.emitter.emit('state-changed', self.getState());
+        self.streamTracks = [];
+        self.emitter.emit('stream-tracks-changed', self.streamTracks);
         self.mpd_command('clear');
         const exec = require('child_process').exec;
         const yt_downloader = 'yt-dlp';
-        const cmd = yt_downloader + ' --flat-playlist --get-url ' + playlist.url;
+        const cmd = yt_downloader + ' --flat-playlist --print url --print title ' + playlist.url;
         exec(cmd, function (err, stdout, stderr) {
             if (gen !== self._streamGen) return;
             if (err) {
                 console.log('stream playlist error:', playlist.name);
                 return;
             }
-            const videoURLs = stdout.trim().split('\n');
-            console.log(playlist.name + ': loading', videoURLs.length, 'tracks');
-            videoURLs.forEach(function(URL) {
-                if (URL.length == 0)
-                    return;
-                const streamCmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
+            const lines = stdout.trim().split('\n');
+            const tracks = [];
+            for (let i = 0; i + 1 < lines.length; i += 2) {
+                tracks.push({ url: lines[i], title: lines[i + 1] });
+            }
+            console.log(playlist.name + ': loading', tracks.length, 'tracks');
+            self.streamTracks = tracks.map(t => t.title);
+            self.emitter.emit('stream-tracks-changed', self.streamTracks);
+            tracks.forEach(function(track) {
+                const streamCmd = yt_downloader + ' -g ' + track.url + ' | tail -n 1';
                 exec(streamCmd, function (err, stdout, stderr) {
                     if (gen !== self._streamGen) return;
                     if (err) {
@@ -308,7 +315,8 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
             title: self.current_title,
             videos: self.videos,
             playlists: self.playlists,
-            currentPlaylist: self.currentPlaylist
+            currentPlaylist: self.currentPlaylist,
+            streamTracks: self.streamTracks
         };
     }
 

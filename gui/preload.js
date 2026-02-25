@@ -12,4 +12,5 @@ contextBridge.exposeInMainWorld('termtube', {
     onTitleChanged: (cb) => ipcRenderer.on('title-changed', (_e, title) => cb(title)),
     onPlaylistChanged: (cb) => ipcRenderer.on('playlist-changed', (_e, videos) => cb(videos)),
     onPlaylistsChanged: (cb) => ipcRenderer.on('playlists-changed', (_e, playlists) => cb(playlists)),
+    onStreamTracksChanged: (cb) => ipcRenderer.on('stream-tracks-changed', (_e, tracks) => cb(tracks)),
 });

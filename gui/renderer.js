@@ -160,7 +160,9 @@ function updateState(state) {
     }
 
     // Playlist
-    if (state.videos) {
+    if (state.mode === 'stream') {
+        updateStreamTrackList(state.streamTracks || []);
+    } else if (state.videos) {
         updatePlaylist(state.videos);
     }
 }
@@ -210,6 +212,19 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+function updateStreamTrackList(tracks) {
+    playlistCount.textContent = tracks.length;
+    playlistEl.innerHTML = '';
+    tracks.forEach(function(title) {
+        const item = document.createElement('div');
+        item.className = 'playlist-item';
+        item.textContent = title;
+        item.title = title;
+        playlistEl.appendChild(item);
+    });
+    applySearchFilter();
+}
+
 function highlightActiveTrack(title) {
     const items = playlistEl.querySelectorAll('.playlist-item');
     items.forEach(function(item) {
@@ -230,6 +245,7 @@ window.termtube.onPlaylistsChanged(function(playlists) {
     cachedPlaylists = playlists;
     renderStreamList(cachedPlaylists, cachedCurrentPlaylist);
 });
+window.termtube.onStreamTracksChanged(updateStreamTrackList);
 
 // Initialize
 window.termtube.getState().then(updateState);
