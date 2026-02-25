@@ -113,7 +113,8 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this.mpd.on('ready', function() {
         console.log("mpd ready");
         self.mpd_ready = true;
-        self.mpd_update_state();
+        self.mpd_command('stop');
+        self.reload();
         self.mpd_command('random', ['1'])
         self.mpd_command('repeat', ['1'])
     });
