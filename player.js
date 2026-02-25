@@ -128,7 +128,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     }
 
     this.start = function() {
-        if (self.mpd_check_state('stop')) {
+        if (self.mpd_check_state('stop') && self.mode === 'likes') {
             self.reload();
         }
         self.mpd_command('play');
