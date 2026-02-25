@@ -10,112 +10,137 @@ const defaultPlaylists = [
     {"name": "calm-jazz", "url": "https://www.youtube.com/playlist?list=PL61ZikC3WfojSgt1PeWLSzj9qqXpVpCfA"}
 ];
 
-function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlistsPath=playlistsPathDef) {
-    let self = this;
-    this.videos = [];
-    this.mode = 'likes';
-    this.current_title = '';
-    this.currentPlaylist = '';
-    this.streamTracks = [];
-    this._streamUrlToTitle = {};
-    this._streamGen = 0;
+class Player {
+    constructor(commandSock = commandSockDef, lofiURLFile = lofiURLFileDef, playlistsPath = playlistsPathDef) {
+        this.videos = [];
+        this.mode = 'likes';
+        this._currentTitle = '';
+        this.currentPlaylist = '';
+        this.streamTracks = [];
+        this._streamUrlToTitle = {};
+        this._streamGen = 0;
 
-    // Player's attributes
-    this.emitter = new EventEmitter();
-    try {
-        const raw = fs.readFileSync(lofiURLFile);
-        this.lofiURLs = raw.toString('utf-8').split('\n');
-    } catch {
-        console.log('failed to read the lofi URLs', lofiURLFile);
-        this.lofiURLs = [];
+        this.emitter = new EventEmitter();
+        try {
+            const raw = fs.readFileSync(lofiURLFile);
+            this.lofiURLs = raw.toString('utf-8').split('\n');
+        } catch {
+            console.log('failed to read the lofi URLs', lofiURLFile);
+            this.lofiURLs = [];
+        }
+
+        // Load streaming playlists from JSON (migrate if missing)
+        this.playlistsPath = playlistsPath;
+        try {
+            this.playlists = JSON.parse(fs.readFileSync(playlistsPath, 'utf-8'));
+        } catch {
+            const dir = require('path').dirname(playlistsPath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            this.playlists = defaultPlaylists.slice();
+            fs.writeFileSync(playlistsPath, JSON.stringify(this.playlists, null, 2));
+        }
+
+        // MPD state
+        this._mpdReady = false;
+        this._mpdState = 'stop';
+        this.cmd = mpd.cmd;
+        this._mpdRetries = 0;
+        this._connectMpd();
+
+        // Register event handlers
+        this.emitter.on('start', () => this.startStop());
+        this.emitter.on('stop', () => this.startStop());
+        this.emitter.on('reload', () => this.reload());
+        this.emitter.on('next', () => this.next());
+        this.emitter.on('mode-change', () => this.modeChange());
+        this.emitter.on('set-mode', (target) => this.setMode(target));
+        this.emitter.on('play-track', (filename) => this.playTrack(filename));
+        this.emitter.on('play-stream-track', (title) => this.playStreamTrack(title));
+        this.emitter.on('remove-playlist', (name) => this.removePlaylist(name));
+        this.emitter.on('select-playlist', (name) => this.selectPlaylist(name));
+
+        // Launch sockets
+        this.handler = unix.handler(this.emitter, commandSock);
     }
 
-    // Load streaming playlists from JSON (migrate if missing)
-    this.playlistsPath = playlistsPath;
-    try {
-        this.playlists = JSON.parse(fs.readFileSync(playlistsPath, 'utf-8'));
-    } catch {
-        const dir = require('path').dirname(playlistsPath);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        this.playlists = defaultPlaylists.slice();
-        fs.writeFileSync(playlistsPath, JSON.stringify(this.playlists, null, 2));
-    }
+    // --- MPD connection ---
 
-    // MPD's attributes
-    this.mpd_ready = false;
-    this.mpd_state = 'stop';
-    this.cmd = mpd.cmd;
-    this._mpdRetries = 0;
-    this._connectMpd = function() {
-        self.mpd_ready = false;
-        self.mpd = mpd.connect({
+    _connectMpd() {
+        this._mpdReady = false;
+        this.mpd = mpd.connect({
             path: process.env.HOME + "/.mpd/socket"
         });
-        function scheduleReconnect(reason) {
-            self.mpd_ready = false;
-            if (++self._mpdRetries >= 5) {
+        const scheduleReconnect = () => {
+            this._mpdReady = false;
+            if (++this._mpdRetries >= 5) {
                 console.log('mpd: giving up after 5 retries');
                 return;
             }
-            setTimeout(function() {
-                console.log('mpd reconnecting (' + self._mpdRetries + '/5)...');
-                self._connectMpd();
+            setTimeout(() => {
+                console.log('mpd reconnecting (' + this._mpdRetries + '/5)...');
+                this._connectMpd();
             }, 2000);
-        }
-        self.mpd.on('error', function(err) {
+        };
+        this.mpd.on('error', (err) => {
             console.log('mpd connection error:', err.message);
             scheduleReconnect();
         });
-        self.mpd.on('end', function() {
+        this.mpd.on('end', () => {
             console.log('mpd connection closed');
             scheduleReconnect();
         });
-        self.mpd.on('ready', function() {
+        this.mpd.on('ready', () => {
             console.log("mpd ready");
-            self.mpd_ready = true;
-            self._mpdRetries = 0;
-            self.mpd_command('stop');
-            self.reload();
-            self.mpd_command('random', ['1']);
-            self.mpd_command('repeat', ['1']);
+            this._mpdReady = true;
+            this._mpdRetries = 0;
+            this._mpdCommand('stop');
+            this.reload();
+            this._mpdCommand('random', ['1']);
+            this._mpdCommand('repeat', ['1']);
         });
-        self.mpd.on('system-player', function() {
-            self.mpd_update_state();
+        this.mpd.on('system-player', () => {
+            this._updateMpdState();
         });
-    };
-    this._connectMpd();
-
-    this._print_title = function(title) {
-        title = title.trim();
-        console.log("Title: " + title);
-        self.current_title = title;
-        const path = process.env.HOME + '/.mpd/current_title';
-        fs.writeFile(path, title, function (err) {
-            if (err) return console.log(err);
-        });
-        self.emitter.emit('title-changed', title);
     }
 
-    this.print_title = function() {
-        self.mpd_command('currentsong', [], function(err, msg) {
+    _mpdCommand(cmd, args = [], callback = function () {}) {
+        if (!this._mpdReady)
+            return;
+        return this.mpd.sendCommand(this.cmd(cmd, args), callback);
+    }
+
+    // --- Title / State ---
+
+    _printTitle(title) {
+        title = title.trim();
+        console.log("Title: " + title);
+        this._currentTitle = title;
+        const path = process.env.HOME + '/.mpd/current_title';
+        fs.writeFile(path, title, (err) => {
+            if (err) return console.log(err);
+        });
+        this.emitter.emit('title-changed', title);
+    }
+
+    _updateTitle() {
+        this._mpdCommand('currentsong', [], (err, msg) => {
             if (err) { console.log('currentsong error:', err.message); return; }
-            // Try to get the full file URI (works for both local files and URLs)
             const fileRe = /^file: (.+)$/im;
             const fileMatch = msg.match(fileRe);
             if (!fileMatch || !fileMatch[1]) {
-                self._print_title("Unknown title");
+                this._printTitle("Unknown title");
                 return;
             }
             const file = fileMatch[1];
             // Stream mode: look up URL in mapping
-            if (self.mode == 'stream' || self.mode == 'lofi') {
-                const mapped = self._streamUrlToTitle[file];
+            if (this.mode == 'stream' || this.mode == 'lofi') {
+                const mapped = this._streamUrlToTitle[file];
                 if (mapped) {
-                    self._print_title(mapped);
-                } else if (self.mode == 'lofi') {
-                    self._print_title("Playing lofi music");
+                    this._printTitle(mapped);
+                } else if (this.mode == 'lofi') {
+                    this._printTitle("Playing lofi music");
                 } else {
-                    self._print_title("Playing " + self.currentPlaylist);
+                    this._printTitle("Playing " + this.currentPlaylist);
                 }
                 return;
             }
@@ -123,133 +148,165 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
             const localRe = /^([a-z0-9\.\-\_]*)$/im;
             const localMatch = file.match(localRe);
             if (!localMatch) {
-                self._print_title("Unknown title");
+                this._printTitle("Unknown title");
                 return;
             }
             const filename = localMatch[1];
-            const found = self.videos.find(elem => elem.filename == filename);
-            self._print_title(found ? found.title : filename);
+            const found = this.videos.find(elem => elem.filename == filename);
+            this._printTitle(found ? found.title : filename);
         });
     }
 
-    this.mpd_update_state = function() {
-        self.mpd_command("status", [], function(err, msg) {
+    _updateMpdState() {
+        this._mpdCommand("status", [], (err, msg) => {
             if (err) { console.log('status error:', err.message); return; }
             const re = /^state: ([a-z]*)$/im;
             let found = msg.match(re);
             if (found == null || found.length < 2) {
-                self.mpd_set_state('stop');
+                this._setState('stop');
             } else {
-                self.mpd_set_state(found[1]);
+                this._setState(found[1]);
             }
-            self.print_title();
+            this._updateTitle();
         });
     }
 
-
-    // MPD wrapper
-    this.mpd_command = function(cmd, args=[], callback=function () {}) {
-        if (!self.mpd_ready)
-            return;
-        return self.mpd.sendCommand(self.cmd(cmd, args), callback);
+    _checkState(s) {
+        return this._mpdState == s;
     }
 
-    this.add = function(id, title) {
-        const filename = id + '.webm';
-        if (self.videos.findIndex(elem => elem.filename == filename) != -1) {
-            return;
-        }
-        self.videos.push({'title': title, 'filename': filename});
-        self.emitter.emit('playlist-changed', self.videos);
-        self.mpd_command('update')
-        if (self.mode == 'likes')
-            self.mpd_command('add', [filename])
-    }
-
-    this.start = function() {
-        if (self.mpd_check_state('stop') && self.mode === 'likes') {
-            self.reload();
-        }
-        self.mpd_command('play');
-    }
-
-    this.stop = function() {
-        self.mpd_command('stop');
-    }
-
-    this.mpd_check_state = function(s) {
-        return self.mpd_state == s;
-    }
-
-    this.mpd_set_state = function(state) {
+    _setState(state) {
         console.log('change the state to ', state);
-        self.mpd_state = state;
-        self.emitter.emit('state-changed', self.getState());
+        this._mpdState = state;
+        this.emitter.emit('state-changed', this.getState());
     }
 
-    this.startstop = function() {
-        if (self.mpd_check_state('stop') || self.mpd_check_state('pause')) {
-            self.start();
+    // --- Playback ---
+
+    start() {
+        if (this._checkState('stop') && this.mode === 'likes') {
+            this.reload();
+        }
+        this._mpdCommand('play');
+    }
+
+    stop() {
+        this._mpdCommand('stop');
+    }
+
+    startStop() {
+        if (this._checkState('stop') || this._checkState('pause')) {
+            this.start();
         } else {
-            self.stop();
+            this.stop();
         }
     }
 
-    this.reload = function() {
-        self.mode = 'likes';
-        ++self._streamGen;
-        self.emitter.emit('state-changed', self.getState());
-        self.mpd_command('clear');
-        self.mpd_command('update');
-        self.videos.forEach(function (video) {
-            self.mpd_command('add', [video.filename]);
+    next() {
+        this._mpdCommand('next');
+    }
+
+    reload() {
+        this.mode = 'likes';
+        ++this._streamGen;
+        this.emitter.emit('state-changed', this.getState());
+        this._mpdCommand('clear');
+        this._mpdCommand('update');
+        this.videos.forEach((video) => {
+            this._mpdCommand('add', [video.filename]);
         });
     }
 
-    this.next = function() {
-        self.mpd_command('next');
+    // --- Likes ---
+
+    add(id, title) {
+        const filename = id + '.webm';
+        if (this.videos.findIndex(elem => elem.filename == filename) != -1) {
+            return;
+        }
+        this.videos.push({'title': title, 'filename': filename});
+        this.emitter.emit('playlist-changed', this.videos);
+        this._mpdCommand('update');
+        if (this.mode == 'likes')
+            this._mpdCommand('add', [filename]);
     }
 
-    this.remove = function(filename) {
-        const idx = self.videos.findIndex(elem => elem.filename == filename);
+    remove(filename) {
+        const idx = this.videos.findIndex(elem => elem.filename == filename);
         if (idx === -1) return;
-        self.videos.splice(idx, 1);
-        self.emitter.emit('playlist-changed', self.videos);
-        self.mpd_command('playlistfind', ['file', filename], function(err, msg) {
+        this.videos.splice(idx, 1);
+        this.emitter.emit('playlist-changed', this.videos);
+        this._mpdCommand('playlistfind', ['file', filename], (err, msg) => {
             if (err) return;
             const re = /^Id: (\d+)$/im;
             const found = msg.match(re);
             if (found && found.length >= 2) {
-                self.mpd_command('deleteid', [found[1]]);
+                this._mpdCommand('deleteid', [found[1]]);
             }
         });
     }
 
-    this.play_track = function(filename) {
-        self.mpd_command('playlistfind', ['file', filename], function(err, msg) {
+    playTrack(filename) {
+        this._mpdCommand('playlistfind', ['file', filename], (err, msg) => {
             if (err) return;
             const re = /^Pos: (\d+)$/im;
             const found = msg.match(re);
             if (found && found.length >= 2) {
-                self.mpd_command('play', [found[1]]);
+                this._mpdCommand('play', [found[1]]);
             }
         });
     }
 
-    this._switch_to_lofi = function() {
+    // --- Mode switching ---
+
+    modeChange() {
+        if (this.mode == 'likes') {
+            this._switchToLofi();
+        } else if (this.mode == 'lofi') {
+            this._switchToStream();
+        } else {
+            this._switchToLikes();
+        }
+    }
+
+    setMode(target) {
+        if (target.startsWith('stream:')) {
+            const name = target.slice(7);
+            const pl = this.playlists.find(p => p.name === name);
+            if (pl) this._switchToStream(pl);
+            return;
+        }
+        if (target == this.mode) return;
+        if (target == 'lofi') {
+            this._switchToLofi();
+        } else if (target == 'stream') {
+            this._switchToStream();
+        } else {
+            this._switchToLikes();
+        }
+    }
+
+    _switchToLikes() {
+        console.log('change mode to likes');
+        this.mode = 'likes';
+        this.emitter.emit('state-changed', this.getState());
+        this.reload();
+    }
+
+    _switchToLofi() {
         console.log('change mode to lofi');
-        self.mode = 'lofi';
-        const gen = ++self._streamGen;
-        self.emitter.emit('state-changed', self.getState());
-        self.mpd_command('clear');
-        self.lofiURLs.forEach(function(URL) {
+        this.mode = 'lofi';
+        const gen = ++this._streamGen;
+        this.emitter.emit('state-changed', this.getState());
+        this._mpdCommand('clear');
+        this.lofiURLs.forEach((URL) => {
             if (URL.length == 0)
                 return;
             const exec = require('child_process').exec;
             const yt_downloader = 'yt-dlp';
             const cmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
-            exec(cmd, function (err, stdout, stderr) {
-                if (gen !== self._streamGen) return;
+            exec(cmd, (err, stdout, stderr) => {
+                if (gen !== this._streamGen) return;
                 if (err) {
                     console.log('lofi stream error:', URL);
                     return;
@@ -259,30 +316,30 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
                     console.log("URL is broken", URL);
                     return;
                 }
-                self.mpd_command('add', [stdout]);
+                this._mpdCommand('add', [stdout]);
             });
         });
     }
 
-    this._switch_to_stream = function(playlist) {
+    _switchToStream(playlist) {
         if (!playlist) {
-            if (self.playlists.length === 0) return;
-            playlist = self.playlists.find(p => p.name === self.currentPlaylist) || self.playlists[0];
+            if (this.playlists.length === 0) return;
+            playlist = this.playlists.find(p => p.name === this.currentPlaylist) || this.playlists[0];
         }
         console.log('change mode to stream:', playlist.name);
-        self.mode = 'stream';
-        self.currentPlaylist = playlist.name;
-        const gen = ++self._streamGen;
-        self.emitter.emit('state-changed', self.getState());
-        self.streamTracks = [];
-        self._streamUrlToTitle = {};
-        self.emitter.emit('stream-tracks-changed', self.streamTracks);
-        self.mpd_command('clear');
+        this.mode = 'stream';
+        this.currentPlaylist = playlist.name;
+        const gen = ++this._streamGen;
+        this.emitter.emit('state-changed', this.getState());
+        this.streamTracks = [];
+        this._streamUrlToTitle = {};
+        this.emitter.emit('stream-tracks-changed', this.streamTracks);
+        this._mpdCommand('clear');
         const exec = require('child_process').exec;
         const yt_downloader = 'yt-dlp';
         const cmd = yt_downloader + ' --flat-playlist --print url --print title ' + playlist.url;
-        exec(cmd, function (err, stdout, stderr) {
-            if (gen !== self._streamGen) return;
+        exec(cmd, (err, stdout, stderr) => {
+            if (gen !== this._streamGen) return;
             if (err) {
                 console.log('stream playlist error:', playlist.name);
                 return;
@@ -293,12 +350,12 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
                 tracks.push({ url: lines[i], title: lines[i + 1] });
             }
             console.log(playlist.name + ': loading', tracks.length, 'tracks');
-            self.streamTracks = tracks.map(t => t.title);
-            self.emitter.emit('stream-tracks-changed', self.streamTracks);
-            tracks.forEach(function(track) {
+            this.streamTracks = tracks.map(t => t.title);
+            this.emitter.emit('stream-tracks-changed', this.streamTracks);
+            tracks.forEach((track) => {
                 const streamCmd = yt_downloader + ' -g ' + track.url + ' | tail -n 1';
-                exec(streamCmd, function (err, stdout, stderr) {
-                    if (gen !== self._streamGen) return;
+                exec(streamCmd, (err, stdout, stderr) => {
+                    if (gen !== this._streamGen) return;
                     if (err) {
                         return;
                     }
@@ -306,126 +363,77 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
                     if (stdout.length == 0) {
                         return;
                     }
-                    self._streamUrlToTitle[stdout] = track.title;
-                    self.mpd_command('add', [stdout]);
+                    this._streamUrlToTitle[stdout] = track.title;
+                    this._mpdCommand('add', [stdout]);
                 });
             });
         });
     }
 
-    this._switch_to_likes = function() {
-        console.log('change mode to likes');
-        self.mode = 'likes';
-        self.emitter.emit('state-changed', self.getState());
-        self.reload();
-    }
+    // --- Stream playlist CRUD ---
 
-    this.mode_change = function() {
-        if (self.mode == 'likes') {
-            self._switch_to_lofi();
-        } else if (self.mode == 'lofi') {
-            self._switch_to_stream();
-        } else {
-            self._switch_to_likes();
-        }
-    }
-
-    this.set_mode = function(target) {
-        if (target.startsWith('stream:')) {
-            const name = target.slice(7);
-            const pl = self.playlists.find(p => p.name === name);
-            if (pl) self._switch_to_stream(pl);
-            return;
-        }
-        if (target == self.mode) return;
-        if (target == 'lofi') {
-            self._switch_to_lofi();
-        } else if (target == 'stream') {
-            self._switch_to_stream();
-        } else {
-            self._switch_to_likes();
-        }
-    }
-
-    this.getState = function() {
-        return {
-            mode: self.mode,
-            state: self.mpd_state,
-            title: self.current_title,
-            videos: self.videos,
-            playlists: self.playlists,
-            currentPlaylist: self.currentPlaylist,
-            streamTracks: self.streamTracks
-        };
-    }
-
-    this._savePlaylists = function() {
-        fs.writeFileSync(self.playlistsPath, JSON.stringify(self.playlists, null, 2));
-    }
-
-    this.addPlaylist = function(name, url) {
-        if (self.playlists.find(p => p.name === name)) return 'duplicate';
+    addPlaylist(name, url) {
+        if (this.playlists.find(p => p.name === name)) return 'duplicate';
         if (!/[?&]list=/.test(url)) return 'not-playlist';
-        self.playlists.push({ name, url });
-        self._savePlaylists();
-        self.emitter.emit('playlists-changed', self.playlists);
+        this.playlists.push({ name, url });
+        this._savePlaylists();
+        this.emitter.emit('playlists-changed', this.playlists);
         return null;
     }
 
-    this.removePlaylist = function(name) {
-        const idx = self.playlists.findIndex(p => p.name === name);
+    removePlaylist(name) {
+        const idx = this.playlists.findIndex(p => p.name === name);
         if (idx === -1) return;
-        self.playlists.splice(idx, 1);
-        self._savePlaylists();
-        self.emitter.emit('playlists-changed', self.playlists);
-        if (self.mode === 'stream' && self.currentPlaylist === name) {
-            if (self.playlists.length > 0) {
-                self._switch_to_stream(self.playlists[0]);
+        this.playlists.splice(idx, 1);
+        this._savePlaylists();
+        this.emitter.emit('playlists-changed', this.playlists);
+        if (this.mode === 'stream' && this.currentPlaylist === name) {
+            if (this.playlists.length > 0) {
+                this._switchToStream(this.playlists[0]);
             } else {
-                self._switch_to_likes();
+                this._switchToLikes();
             }
         }
     }
 
-    this.play_stream_track = function(title) {
-        // Find the stream URL for this title
-        const url = Object.keys(self._streamUrlToTitle).find(
-            k => self._streamUrlToTitle[k] === title
+    selectPlaylist(name) {
+        const pl = this.playlists.find(p => p.name === name);
+        if (!pl) return;
+        this._switchToStream(pl);
+    }
+
+    playStreamTrack(title) {
+        const url = Object.keys(this._streamUrlToTitle).find(
+            k => this._streamUrlToTitle[k] === title
         );
         if (!url) return;
-        self.mpd_command('playlistfind', ['file', url], function(err, msg) {
+        this._mpdCommand('playlistfind', ['file', url], (err, msg) => {
             if (err) return;
             const re = /^Pos: (\d+)$/im;
             const found = msg.match(re);
             if (found && found.length >= 2) {
-                self.mpd_command('play', [found[1]]);
+                this._mpdCommand('play', [found[1]]);
             }
         });
     }
 
-    this.selectPlaylist = function(name) {
-        const pl = self.playlists.find(p => p.name === name);
-        if (!pl) return;
-        self._switch_to_stream(pl);
+    _savePlaylists() {
+        fs.writeFileSync(this.playlistsPath, JSON.stringify(this.playlists, null, 2));
     }
 
-    // Register event handlers
-    this.emitter.on('start', self.startstop);
-    this.emitter.on('stop', self.startstop);
-    this.emitter.on('reload', self.reload);
-    this.emitter.on('next', self.next);
-    this.emitter.on('mode-change', self.mode_change);
-    this.emitter.on('set-mode', self.set_mode);
-    this.emitter.on('play-track', self.play_track);
-    this.emitter.on('play-stream-track', self.play_stream_track);
-    this.emitter.on('remove-playlist', self.removePlaylist);
-    this.emitter.on('select-playlist', self.selectPlaylist);
+    // --- State ---
 
-    // Launch sockets
-    this.handler = unix.handler(self.emitter, commandSock);
-
-    // Now we are ready
-    return this
+    getState() {
+        return {
+            mode: this.mode,
+            state: this._mpdState,
+            title: this._currentTitle,
+            videos: this.videos,
+            playlists: this.playlists,
+            currentPlaylist: this.currentPlaylist,
+            streamTracks: this.streamTracks
+        };
+    }
 }
 
-module.exports.player = player;
+module.exports.Player = Player;

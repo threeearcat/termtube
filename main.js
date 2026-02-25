@@ -1,7 +1,7 @@
 'use strict'
 
 const fs = require('fs');
-const {player} = require(__dirname + '/player');
+const {Player} = require(__dirname + '/player');
 const {downloader} = require(__dirname + '/downloader');
 const backend = require(__dirname + '/backend');
 
@@ -22,7 +22,7 @@ if (process.argv.includes('--kill')) {
 }
 fs.writeFileSync(PID_FILE, String(process.pid));
 
-let p = new player();
+let p = new Player();
 let d = new downloader();
 
 backend.start(p, d);
