@@ -16,6 +16,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this.mode = 'likes';
     this.current_title = '';
     this.currentPlaylist = '';
+    this._streamGen = 0;
 
     // Player's attributes
     this.emitter = new EventEmitter();
@@ -158,6 +159,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
 
     this.reload = function() {
         self.mode = 'likes';
+        ++self._streamGen;
         self.emitter.emit('state-changed', self.getState());
         self.mpd_command('clear');
         self.mpd_command('update');
@@ -199,6 +201,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this._switch_to_lofi = function() {
         console.log('change mode to lofi');
         self.mode = 'lofi';
+        const gen = ++self._streamGen;
         self.emitter.emit('state-changed', self.getState());
         self.mpd_command('clear');
         self.lofiURLs.forEach(function(URL) {
@@ -208,6 +211,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
             const yt_downloader = 'yt-dlp';
             const cmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
             exec(cmd, function (err, stdout, stderr) {
+                if (gen !== self._streamGen) return;
                 if (err) {
                     console.log('lofi stream error:', URL);
                     return;
@@ -230,12 +234,14 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
         console.log('change mode to stream:', playlist.name);
         self.mode = 'stream';
         self.currentPlaylist = playlist.name;
+        const gen = ++self._streamGen;
         self.emitter.emit('state-changed', self.getState());
         self.mpd_command('clear');
         const exec = require('child_process').exec;
         const yt_downloader = 'yt-dlp';
         const cmd = yt_downloader + ' --flat-playlist --get-url ' + playlist.url;
         exec(cmd, function (err, stdout, stderr) {
+            if (gen !== self._streamGen) return;
             if (err) {
                 console.log('stream playlist error:', playlist.name);
                 return;
@@ -247,6 +253,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
                     return;
                 const streamCmd = yt_downloader + ' -g ' + URL + ' | tail -n 1';
                 exec(streamCmd, function (err, stdout, stderr) {
+                    if (gen !== self._streamGen) return;
                     if (err) {
                         return;
                     }
@@ -310,10 +317,12 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     }
 
     this.addPlaylist = function(name, url) {
-        if (self.playlists.find(p => p.name === name)) return;
+        if (self.playlists.find(p => p.name === name)) return 'duplicate';
+        if (!/[?&]list=/.test(url)) return 'not-playlist';
         self.playlists.push({ name, url });
         self._savePlaylists();
         self.emitter.emit('playlists-changed', self.playlists);
+        return null;
     }
 
     this.removePlaylist = function(name) {
@@ -345,7 +354,6 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this.emitter.on('mode-change', self.mode_change);
     this.emitter.on('set-mode', self.set_mode);
     this.emitter.on('play-track', self.play_track);
-    this.emitter.on('add-playlist', function(data) { self.addPlaylist(data.name, data.url); });
     this.emitter.on('remove-playlist', self.removePlaylist);
     this.emitter.on('select-playlist', self.selectPlaylist);
 

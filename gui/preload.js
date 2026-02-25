@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('termtube', {
     playerAction: (action) => ipcRenderer.send('player-action', action),
     playTrack: (filename) => ipcRenderer.send('play-track', filename),
     setMode: (mode) => ipcRenderer.send('set-mode', mode),
-    addPlaylist: (name, url) => ipcRenderer.send('add-playlist', { name, url }),
+    addPlaylist: (name, url) => ipcRenderer.invoke('add-playlist', { name, url }),
     removePlaylist: (name) => ipcRenderer.send('remove-playlist', name),
     selectPlaylist: (name) => ipcRenderer.send('select-playlist', name),
     onStateChanged: (cb) => ipcRenderer.on('state-changed', (_e, state) => cb(state)),

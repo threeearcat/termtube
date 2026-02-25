@@ -68,8 +68,8 @@ ipcMain.on('set-mode', (event, mode) => {
     p.emitter.emit('set-mode', mode);
 });
 
-ipcMain.on('add-playlist', (event, data) => {
-    p.emitter.emit('add-playlist', data);
+ipcMain.handle('add-playlist', (event, data) => {
+    return p.addPlaylist(data.name, data.url);
 });
 
 ipcMain.on('remove-playlist', (event, name) => {

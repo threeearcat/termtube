@@ -72,11 +72,21 @@ streamCancelBtn.addEventListener('click', () => {
     streamUrlInput.value = '';
 });
 
-streamSaveBtn.addEventListener('click', () => {
+streamSaveBtn.addEventListener('click', async () => {
     const name = streamNameInput.value.trim();
     const url = streamUrlInput.value.trim();
     if (!name || !url) return;
-    window.termtube.addPlaylist(name, url);
+    const err = await window.termtube.addPlaylist(name, url);
+    if (err === 'not-playlist') {
+        streamUrlInput.classList.add('input-error');
+        setTimeout(() => streamUrlInput.classList.remove('input-error'), 1500);
+        return;
+    }
+    if (err === 'duplicate') {
+        streamNameInput.classList.add('input-error');
+        setTimeout(() => streamNameInput.classList.remove('input-error'), 1500);
+        return;
+    }
     streamNameInput.value = '';
     streamUrlInput.value = '';
     streamAddForm.classList.add('hidden');

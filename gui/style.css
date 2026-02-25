@@ -393,3 +393,14 @@ body {
 #stream-cancel:hover {
     background: #444466;
 }
+
+.input-error {
+    border-color: #e94560 !important;
+    animation: shake 0.3s;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+}
