@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('termtube', {
     getState: () => ipcRenderer.invoke('get-state'),
     playerAction: (action) => ipcRenderer.send('player-action', action),
     playTrack: (filename) => ipcRenderer.send('play-track', filename),
+    playStreamTrack: (title) => ipcRenderer.send('play-stream-track', title),
     setMode: (mode) => ipcRenderer.send('set-mode', mode),
     addPlaylist: (name, url) => ipcRenderer.invoke('add-playlist', { name, url }),
     removePlaylist: (name) => ipcRenderer.send('remove-playlist', name),

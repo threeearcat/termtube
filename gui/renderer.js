@@ -220,9 +220,13 @@ function updateStreamTrackList(tracks) {
         item.className = 'playlist-item';
         item.textContent = title;
         item.title = title;
+        item.addEventListener('click', function() {
+            window.termtube.playStreamTrack(title);
+        });
         playlistEl.appendChild(item);
     });
     applySearchFilter();
+    highlightActiveTrack(currentTitle.textContent);
 }
 
 function highlightActiveTrack(title) {

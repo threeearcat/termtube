@@ -64,6 +64,10 @@ ipcMain.on('play-track', (event, filename) => {
     p.emitter.emit('play-track', filename);
 });
 
+ipcMain.on('play-stream-track', (event, title) => {
+    p.emitter.emit('play-stream-track', title);
+});
+
 ipcMain.on('set-mode', (event, mode) => {
     p.emitter.emit('set-mode', mode);
 });

@@ -17,6 +17,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this.current_title = '';
     this.currentPlaylist = '';
     this.streamTracks = [];
+    this._streamUrlToTitle = {};
     this._streamGen = 0;
 
     // Player's attributes
@@ -62,25 +63,36 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this.print_title = function() {
         self.mpd_command('currentsong', [], function(err, msg) {
             if (err) throw err;
-            const re = /^file: ([a-z0-9\.\-\_]*)$/im;
-            let found = msg.match(re);
-            if (found == null || found.length < 2) {
-                if (self.mode == 'lofi') {
+            // Try to get the full file URI (works for both local files and URLs)
+            const fileRe = /^file: (.+)$/im;
+            const fileMatch = msg.match(fileRe);
+            if (!fileMatch || !fileMatch[1]) {
+                self._print_title("Unknown title");
+                return;
+            }
+            const file = fileMatch[1];
+            // Stream mode: look up URL in mapping
+            if (self.mode == 'stream' || self.mode == 'lofi') {
+                const mapped = self._streamUrlToTitle[file];
+                if (mapped) {
+                    self._print_title(mapped);
+                } else if (self.mode == 'lofi') {
                     self._print_title("Playing lofi music");
-                } else if (self.mode == 'stream') {
-                    self._print_title("Playing " + self.currentPlaylist);
                 } else {
-                    self._print_title("Unknown title");
+                    self._print_title("Playing " + self.currentPlaylist);
                 }
                 return;
             }
-            let filename = found[1];
-            found = self.videos.find(elem => elem.filename == filename);
-            let towrite = filename;
-            if (found != undefined) {
-                towrite = found.title;
+            // Likes mode: match local filename
+            const localRe = /^([a-z0-9\.\-\_]*)$/im;
+            const localMatch = file.match(localRe);
+            if (!localMatch) {
+                self._print_title("Unknown title");
+                return;
             }
-            self._print_title(towrite);
+            const filename = localMatch[1];
+            const found = self.videos.find(elem => elem.filename == filename);
+            self._print_title(found ? found.title : filename);
         });
     }
 
@@ -238,6 +250,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
         const gen = ++self._streamGen;
         self.emitter.emit('state-changed', self.getState());
         self.streamTracks = [];
+        self._streamUrlToTitle = {};
         self.emitter.emit('stream-tracks-changed', self.streamTracks);
         self.mpd_command('clear');
         const exec = require('child_process').exec;
@@ -268,6 +281,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
                     if (stdout.length == 0) {
                         return;
                     }
+                    self._streamUrlToTitle[stdout] = track.title;
                     self.mpd_command('add', [stdout]);
                 });
             });
@@ -348,6 +362,22 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
         }
     }
 
+    this.play_stream_track = function(title) {
+        // Find the stream URL for this title
+        const url = Object.keys(self._streamUrlToTitle).find(
+            k => self._streamUrlToTitle[k] === title
+        );
+        if (!url) return;
+        self.mpd_command('playlistfind', ['file', url], function(err, msg) {
+            if (err) return;
+            const re = /^Pos: (\d+)$/im;
+            const found = msg.match(re);
+            if (found && found.length >= 2) {
+                self.mpd_command('play', [found[1]]);
+            }
+        });
+    }
+
     this.selectPlaylist = function(name) {
         const pl = self.playlists.find(p => p.name === name);
         if (!pl) return;
@@ -362,6 +392,7 @@ function player(commandSock=commandSockDef, lofiURLFile=lofiURLFileDef, playlist
     this.emitter.on('mode-change', self.mode_change);
     this.emitter.on('set-mode', self.set_mode);
     this.emitter.on('play-track', self.play_track);
+    this.emitter.on('play-stream-track', self.play_stream_track);
     this.emitter.on('remove-playlist', self.removePlaylist);
     this.emitter.on('select-playlist', self.selectPlaylist);
 
