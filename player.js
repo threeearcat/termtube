@@ -19,6 +19,7 @@ class Player {
         this.streamTracks = [];
         this._streamUrlToTitle = {};
         this._streamGen = 0;
+        this._random = true;
 
         this.emitter = new EventEmitter();
         try {
@@ -58,6 +59,7 @@ class Player {
         this.emitter.on('play-stream-track', (title) => this.playStreamTrack(title));
         this.emitter.on('remove-playlist', (name) => this.removePlaylist(name));
         this.emitter.on('select-playlist', (name) => this.selectPlaylist(name));
+        this.emitter.on('toggle-random', () => this.toggleRandom());
 
         // Launch sockets
         this.handler = unix.handler(this.emitter, commandSock);
@@ -178,6 +180,15 @@ class Player {
     _setState(state) {
         console.log('change the state to ', state);
         this._mpdState = state;
+        this.emitter.emit('state-changed', this.getState());
+    }
+
+    // --- Random ---
+
+    toggleRandom() {
+        this._random = !this._random;
+        this._mpdCommand('random', [this._random ? '1' : '0']);
+        console.log('random:', this._random);
         this.emitter.emit('state-changed', this.getState());
     }
 
@@ -431,7 +442,8 @@ class Player {
             videos: this.videos,
             playlists: this.playlists,
             currentPlaylist: this.currentPlaylist,
-            streamTracks: this.streamTracks
+            streamTracks: this.streamTracks,
+            random: this._random
         };
     }
 }

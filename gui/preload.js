@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('termtube', {
     addPlaylist: (name, url) => ipcRenderer.invoke('add-playlist', { name, url }),
     removePlaylist: (name) => ipcRenderer.send('remove-playlist', name),
     selectPlaylist: (name) => ipcRenderer.send('select-playlist', name),
+    toggleRandom: () => ipcRenderer.send('toggle-random'),
     onStateChanged: (cb) => ipcRenderer.on('state-changed', (_e, state) => cb(state)),
     onTitleChanged: (cb) => ipcRenderer.on('title-changed', (_e, title) => cb(title)),
     onPlaylistChanged: (cb) => ipcRenderer.on('playlist-changed', (_e, videos) => cb(videos)),

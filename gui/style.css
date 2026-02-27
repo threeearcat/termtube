@@ -167,6 +167,10 @@ body {
     background: #d63851;
 }
 
+.ctrl-btn.active {
+    color: #e94560;
+}
+
 .ctrl-btn:disabled {
     opacity: 0.3;
     cursor: default;

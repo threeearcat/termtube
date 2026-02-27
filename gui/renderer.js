@@ -19,6 +19,7 @@ const streamNameInput = document.getElementById('stream-name');
 const streamUrlInput = document.getElementById('stream-url');
 const streamSaveBtn = document.getElementById('stream-save');
 const streamCancelBtn = document.getElementById('stream-cancel');
+const btnRandom = document.getElementById('btn-random');
 
 let cachedPlaylists = [];
 let cachedCurrentPlaylist = '';
@@ -34,6 +35,10 @@ btnNext.addEventListener('click', () => {
 
 btnMode.addEventListener('click', () => {
     window.termtube.playerAction('mode-change');
+});
+
+btnRandom.addEventListener('click', () => {
+    window.termtube.toggleRandom();
 });
 
 // Mode selector dropdown
@@ -157,6 +162,11 @@ function updateState(state) {
     // Title
     if (state.title) {
         currentTitle.textContent = state.title;
+    }
+
+    // Random
+    if (state.random !== undefined) {
+        btnRandom.classList.toggle('active', state.random);
     }
 
     // Playlist

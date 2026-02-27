@@ -84,6 +84,10 @@ ipcMain.on('select-playlist', (event, name) => {
     p.emitter.emit('select-playlist', name);
 });
 
+ipcMain.on('toggle-random', () => {
+    p.emitter.emit('toggle-random');
+});
+
 // Forward player events to renderer
 function forwardToRenderer(channel, data) {
     if (mainWindow && !mainWindow.isDestroyed()) {
