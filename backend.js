@@ -1,30 +1,30 @@
-'use strict'
+'use strict';
 
 const fs = require('fs');
-const auth = require(__dirname + "/auth.js");
-const {google} = require('googleapis');
+const auth = require(__dirname + '/auth.js');
+const { google } = require('googleapis');
 const notifier = require('node-notifier');
 const { validate } = require(__dirname + '/downloader');
 
-const have_path = process.env.HOME + '/.music/downloaded.json';
-const music_dir = process.env.HOME + '/.music/';
-const app_name = "Termtube"
+const HAVE_PATH = process.env.HOME + '/.music/downloaded.json';
+const MUSIC_DIR = process.env.HOME + '/.music/';
+const APP_NAME = 'Termtube';
 
-function cleanup_broken_files(have) {
+function cleanupBrokenFiles(have) {
     const clean = [];
-    const checks = have.map(function(entry) {
-        const filepath = music_dir + entry.id + '.webm';
-        return validate(filepath).then(function() {
+    const checks = have.map(entry => {
+        const filepath = MUSIC_DIR + entry.id + '.webm';
+        return validate(filepath).then(() => {
             clean.push(entry);
-        }).catch(function(err) {
+        }).catch(err => {
             console.log('removing broken file:', entry.title, '(' + err + ')');
-            try { fs.unlinkSync(filepath); } catch(_) {}
+            try { fs.unlinkSync(filepath); } catch (_) {}
         });
     });
-    return Promise.all(checks).then(function() {
+    return Promise.all(checks).then(() => {
         if (clean.length !== have.length) {
             console.log('cleaned up', have.length - clean.length, 'broken files');
-            fs.writeFileSync(have_path, JSON.stringify(clean));
+            fs.writeFileSync(HAVE_PATH, JSON.stringify(clean));
         }
         return clean;
     });
@@ -32,46 +32,38 @@ function cleanup_broken_files(have) {
 
 function start(p, d) {
     let have = [];
-    if (fs.existsSync(have_path)) {
-        const buf = fs.readFileSync(have_path);
-        const json = buf.toString()
-        have = JSON.parse(json);
+    if (fs.existsSync(HAVE_PATH)) {
+        have = JSON.parse(fs.readFileSync(HAVE_PATH, 'utf-8'));
     }
 
-    cleanup_broken_files(have).then(function(clean) {
+    cleanupBrokenFiles(have).then(clean => {
         have = clean;
-        _start(p, d, have);
+        run(p, d, have);
     });
 }
 
-function _start(p, d, have) {
-
-    function exit_callback(options, exitCode) {
+function run(p, d, have) {
+    function exitCallback(options, exitCode) {
         if (exitCode || exitCode === 0) console.log(`ExitCode ${exitCode}`);
         if (options.exit) {
-            notifier.notify({
-                title: app_name,
-                message: "Exiting...",
-            });
+            notifier.notify({ title: APP_NAME, message: 'Exiting...' });
             process.exit();
         }
     }
 
-    const others = [`SIGINT`, `SIGUSR1`, `SIGUSR2`, `uncaughtException`, `SIGTERM`]
-    others.forEach((eventType) => {
-        process.on(eventType, exit_callback.bind(null, { exit: true }));
-    })
+    ['SIGINT', 'SIGUSR1', 'SIGUSR2', 'uncaughtException', 'SIGTERM'].forEach(sig => {
+        process.on(sig, exitCallback.bind(null, { exit: true }));
+    });
 
-    let likedIds = new Set();
+    const likedIds = new Set();
 
-    function prune_unliked() {
+    function pruneUnliked() {
         const removed = [];
         for (let i = have.length - 1; i >= 0; i--) {
             if (!likedIds.has(have[i].id)) {
                 const entry = have[i];
                 console.log('Removing unliked track:', entry.title);
-                const filepath = music_dir + entry.id + '.webm';
-                try { fs.unlinkSync(filepath); } catch(_) {}
+                try { fs.unlinkSync(MUSIC_DIR + entry.id + '.webm'); } catch (_) {}
                 p.remove(entry.id + '.webm');
                 have.splice(i, 1);
                 removed.push(entry.title);
@@ -79,87 +71,84 @@ function _start(p, d, have) {
         }
         if (removed.length > 0) {
             console.log('Pruned', removed.length, 'unliked tracks');
-            fs.writeFileSync(have_path, JSON.stringify(have));
+            fs.writeFileSync(HAVE_PATH, JSON.stringify(have));
         }
     }
 
-    function retrieve_video(auth, callback, token) {
+    function retrieveVideos(authClient, callback, token) {
         if (token === '') {
-            likedIds = new Set();
+            likedIds.clear();
         }
-        console.log("Retrieving videos", token);
+        console.log('Retrieving videos', token);
         const youtube = google.youtube('v3');
         youtube.videos.list({
-            auth: auth,
-            "part": "id,snippet",
-            "myRating": "like",
-            "maxResults": 50,
+            auth: authClient,
+            part: 'id,snippet',
+            myRating: 'like',
+            maxResults: 50,
             pageToken: token,
-        }).then(function(res) {
-            let ids = res.data.items.map(a => a.id);
-            console.log("Received IDs", ids);
-            ids.forEach(function(id) { likedIds.add(id); });
-            if (callback != undefined) {
-                const videos = res.data.items;
-                videos.forEach(function(video) {
-                    callback(video);
-                });
+        }).then(res => {
+            const ids = res.data.items.map(a => a.id);
+            console.log('Received IDs', ids);
+            ids.forEach(id => likedIds.add(id));
+            if (callback) {
+                res.data.items.forEach(video => callback(video));
             }
-            token = res.data.nextPageToken;
-            var timeout = 1;
-            if (typeof token === 'undefined') {
-                console.log("collected all videos");
-                prune_unliked();
-                token = '';
+            let nextToken = res.data.nextPageToken;
+            let timeout = 1;
+            if (nextToken === undefined) {
+                console.log('collected all videos');
+                pruneUnliked();
+                nextToken = '';
                 timeout = 600;
             }
-            setTimeout(retrieve_video, timeout * 1000, auth, callback, token);
-        }).catch(function(err) {
-            console.error("Execute error", err);
-            if (err.response && err.response.data && err.response.data.error == "invalid_grant") {
+            setTimeout(retrieveVideos, timeout * 1000, authClient, callback, nextToken);
+        }).catch(err => {
+            console.error('Execute error', err);
+            if (err.response && err.response.data && err.response.data.error === 'invalid_grant') {
                 notifier.notify({
-                    title: app_name,
-                    message: "OAuth token is expired. Need to re-authenticate."
+                    title: APP_NAME,
+                    message: 'OAuth token is expired. Need to re-authenticate.'
                 });
             }
         });
     }
 
-    function auth_callback(auth) {
-        console.log("auth done");
-        let to_json = function(id, title) { return {'id': id, 'title': title}; }
-        let download_callback = function(id, title, success) {
+    function toJson(id, title) {
+        return { id, title };
+    }
+
+    function authCallback(authClient) {
+        console.log('auth done');
+        const downloadCallback = (id, title, success) => {
             if (success) {
-                have.push(to_json(id, title));
-                fs.writeFileSync(have_path, JSON.stringify(have));
+                have.push(toJson(id, title));
+                fs.writeFileSync(HAVE_PATH, JSON.stringify(have));
                 p.add(id, title);
             }
-        }
-        let callback = function(video) {
-            let id = video.id
-            let title = video.snippet.title
-            const found = have.findIndex(elem => JSON.stringify(elem) === JSON.stringify(to_json(id, title)));
-            if (found != -1) {
+        };
+        const videoCallback = video => {
+            const id = video.id;
+            const title = video.snippet.title;
+            const found = have.findIndex(elem => elem.id === id && elem.title === title);
+            if (found !== -1) {
                 console.log('Already downloaded', title);
                 p.add(id, title);
-                return;
             } else {
-                d.download(video, download_callback);
+                d.download(video, downloadCallback);
             }
-        }
-        retrieve_video(auth, callback, '');
+        };
+        retrieveVideos(authClient, videoCallback, '');
     }
 
     const scopes = ['https://www.googleapis.com/auth/youtube.readonly'];
-    const token_dir = (process.env.HOME || process.env.HOMEPATH ||
-                       process.env.USERPROFILE) + '/.credentials/';
-    const token_path = {
-        dir: token_dir,
-        path: token_dir + 'termtube.json'
+    const tokenDir = (process.env.HOME || process.env.HOMEPATH || process.env.USERPROFILE) + '/.credentials/';
+    const tokenPath = {
+        dir: tokenDir,
+        path: tokenDir + 'termtube.json'
     };
 
-    auth.authorize(auth_callback, scopes, token_path);
+    auth.authorize(authCallback, scopes, tokenPath);
 }
 
 module.exports = { start };
-
