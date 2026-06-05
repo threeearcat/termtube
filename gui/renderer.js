@@ -170,7 +170,7 @@ function updateState(state) {
     }
 
     // Playlist
-    if (state.mode === 'stream') {
+    if (state.mode === 'stream' || state.mode === 'lofi') {
         updateStreamTrackList(state.streamTracks || []);
     } else if (state.videos) {
         updatePlaylist(state.videos);
@@ -225,14 +225,21 @@ document.addEventListener('keydown', function(e) {
 function updateStreamTrackList(tracks) {
     playlistCount.textContent = tracks.length;
     playlistEl.innerHTML = '';
-    tracks.forEach(function(title) {
+    tracks.forEach(function(track) {
+        const title = typeof track === 'string' ? track : track.title;
+        const broken = typeof track === 'object' && track.broken;
         const item = document.createElement('div');
         item.className = 'playlist-item';
         item.textContent = title;
-        item.title = title;
-        item.addEventListener('click', function() {
-            window.termtube.playStreamTrack(title);
-        });
+        if (broken) {
+            item.classList.add('broken');
+            item.title = title + ' (unavailable)';
+        } else {
+            item.title = title;
+            item.addEventListener('click', function() {
+                window.termtube.playStreamTrack(title);
+            });
+        }
         playlistEl.appendChild(item);
     });
     applySearchFilter();

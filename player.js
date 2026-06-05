@@ -302,23 +302,31 @@ class Player {
         console.log('change mode to lofi');
         this.mode = 'lofi';
         const gen = ++this._streamGen;
+        this._streamUrlToTitle = {};
+        const urls = this.lofiURLs.filter(url => url.length > 0);
+        // Seed the track list with placeholders so the GUI can show every entry
+        // (titles fill in as they resolve; failures are marked broken).
+        this.streamTracks = urls.map(url => ({ title: url, broken: false }));
+        this.emitter.emit('stream-tracks-changed', this.streamTracks);
         this.emitter.emit('state-changed', this.getState());
         this._mpdCommand('clear');
-        this.lofiURLs.forEach(url => {
-            if (url.length === 0) return;
-            const cmd = 'yt-dlp -g ' + url + ' | tail -n 1';
+        urls.forEach((url, i) => {
+            const cmd = 'yt-dlp --print "%(title)s" -g ' + url;
             exec(cmd, (err, stdout) => {
                 if (gen !== this._streamGen) return;
-                if (err) {
-                    console.log('lofi stream error:', url);
+                const lines = err ? [] : stdout.trim().split('\n');
+                if (lines.length < 2) {
+                    console.log('lofi URL is broken:', url);
+                    this.streamTracks[i] = { title: url, broken: true };
+                    this.emitter.emit('stream-tracks-changed', this.streamTracks);
                     return;
                 }
-                stdout = stdout.trim();
-                if (stdout.length === 0) {
-                    console.log('URL is broken', url);
-                    return;
-                }
-                this._mpdCommand('add', [stdout]);
+                const title = lines[0];
+                const streamUrl = lines[lines.length - 1];
+                this.streamTracks[i] = { title, broken: false };
+                this._streamUrlToTitle[streamUrl] = title;
+                this.emitter.emit('stream-tracks-changed', this.streamTracks);
+                this._mpdCommand('add', [streamUrl]);
             });
         });
     }

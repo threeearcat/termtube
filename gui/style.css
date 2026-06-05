@@ -264,6 +264,16 @@ body {
     font-weight: 500;
 }
 
+.playlist-item.broken {
+    color: #555;
+    font-style: italic;
+    cursor: not-allowed;
+}
+
+.playlist-item.broken:hover {
+    background: transparent;
+}
+
 /* Stream playlist picker */
 #stream-picker {
     padding: 8px 16px;
