@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const { EventEmitter } = require('events');
 const unix = require(__dirname + '/unix');
 const mpd = require('mpd');
@@ -13,6 +13,19 @@ const PLAYLISTS_PATH = process.env.HOME + '/.termtube/playlists.json';
 const DEFAULT_PLAYLISTS = [
     { name: 'calm-jazz', url: 'https://www.youtube.com/playlist?list=PL61ZikC3WfojSgt1PeWLSzj9qqXpVpCfA' }
 ];
+const STREAM_URL_FALLBACK_TTL_MS = 6 * 60 * 60 * 1000;
+const STREAM_URL_REFRESH_MARGIN_MS = 30 * 60 * 1000;
+
+function directUrlExpiry(url) {
+    try {
+        const expire = new URL(url).searchParams.get('expire');
+        if (!expire) return null;
+        const expiry = parseInt(expire, 10);
+        return Number.isFinite(expiry) ? expiry * 1000 : null;
+    } catch {
+        return null;
+    }
+}
 
 class Player {
     constructor(commandSock = COMMAND_SOCK, lofiURLFile = LOFI_URL_FILE, playlistsPath = PLAYLISTS_PATH) {
@@ -22,6 +35,7 @@ class Player {
         this.currentPlaylist = '';
         this.streamTracks = [];
         this._streamUrlToTitle = {};
+        this._streamUrlsExpireAt = 0;
         this._streamGen = 0;
         this._random = true;
 
@@ -112,6 +126,34 @@ class Player {
         return this.mpd.sendCommand(this.cmd(cmd, args), callback);
     }
 
+    _resetStreamExpiry() {
+        this._streamUrlsExpireAt = Date.now() + STREAM_URL_FALLBACK_TTL_MS;
+    }
+
+    _rememberStreamUrl(url, title) {
+        this._streamUrlToTitle[url] = title;
+        const expiresAt = directUrlExpiry(url) || (Date.now() + STREAM_URL_FALLBACK_TTL_MS);
+        this._streamUrlsExpireAt = Math.min(this._streamUrlsExpireAt || expiresAt, expiresAt);
+    }
+
+    _streamUrlsNeedRefresh() {
+        if (this.mode !== 'lofi' && this.mode !== 'stream') return false;
+        if (!this._streamUrlsExpireAt) return true;
+        return Date.now() + STREAM_URL_REFRESH_MARGIN_MS >= this._streamUrlsExpireAt;
+    }
+
+    _refreshStreamUrls(autoplay) {
+        if (this.mode === 'lofi') {
+            this._switchToLofi({ autoplay });
+            return true;
+        }
+        if (this.mode === 'stream') {
+            this._switchToStream(undefined, { autoplay });
+            return true;
+        }
+        return false;
+    }
+
     // --- Title / State ---
 
     _printTitle(title) {
@@ -190,6 +232,10 @@ class Player {
     // --- Playback ---
 
     start() {
+        if (this._streamUrlsNeedRefresh()) {
+            this._refreshStreamUrls(true);
+            return;
+        }
         if (this._checkState('stop') && this.mode === 'likes') {
             this.reload();
         }
@@ -209,12 +255,17 @@ class Player {
     }
 
     next() {
+        if (this._streamUrlsNeedRefresh()) {
+            this._refreshStreamUrls(true);
+            return;
+        }
         this._mpdCommand('next');
     }
 
     reload() {
         this.mode = 'likes';
         ++this._streamGen;
+        this._streamUrlsExpireAt = 0;
         this.emitter.emit('state-changed', this.getState());
         this._mpdCommand('clear');
         this._mpdCommand('update');
@@ -298,12 +349,19 @@ class Player {
         this.reload();
     }
 
-    _switchToLofi() {
+    _switchToLofi(options = {}) {
         console.log('change mode to lofi');
         this.mode = 'lofi';
         const gen = ++this._streamGen;
         this._streamUrlToTitle = {};
+        this._resetStreamExpiry();
         const urls = this.lofiURLs.filter(url => url.length > 0);
+        let autoplayStarted = false;
+        const maybeAutoplay = () => {
+            if (!options.autoplay || autoplayStarted) return;
+            autoplayStarted = true;
+            this._mpdCommand('play');
+        };
         // Seed the track list with placeholders so the GUI can show every entry
         // (titles fill in as they resolve; failures are marked broken).
         this.streamTracks = urls.map(url => ({ title: url, broken: false }));
@@ -311,8 +369,7 @@ class Player {
         this.emitter.emit('state-changed', this.getState());
         this._mpdCommand('clear');
         urls.forEach((url, i) => {
-            const cmd = 'yt-dlp --print "%(title)s" -g ' + url;
-            exec(cmd, (err, stdout) => {
+            execFile('yt-dlp', ['--print', '%(title)s', '-g', url], (err, stdout) => {
                 if (gen !== this._streamGen) return;
                 const lines = err ? [] : stdout.trim().split('\n');
                 if (lines.length < 2) {
@@ -324,14 +381,14 @@ class Player {
                 const title = lines[0];
                 const streamUrl = lines[lines.length - 1];
                 this.streamTracks[i] = { title, broken: false };
-                this._streamUrlToTitle[streamUrl] = title;
+                this._rememberStreamUrl(streamUrl, title);
                 this.emitter.emit('stream-tracks-changed', this.streamTracks);
-                this._mpdCommand('add', [streamUrl]);
+                this._mpdCommand('add', [streamUrl], maybeAutoplay);
             });
         });
     }
 
-    _switchToStream(playlist) {
+    _switchToStream(playlist, options = {}) {
         if (!playlist) {
             if (this.playlists.length === 0) return;
             playlist = this.playlists.find(p => p.name === this.currentPlaylist) || this.playlists[0];
@@ -340,13 +397,13 @@ class Player {
         this.mode = 'stream';
         this.currentPlaylist = playlist.name;
         const gen = ++this._streamGen;
+        this._resetStreamExpiry();
         this.emitter.emit('state-changed', this.getState());
         this.streamTracks = [];
         this._streamUrlToTitle = {};
         this.emitter.emit('stream-tracks-changed', this.streamTracks);
         this._mpdCommand('clear');
-        const cmd = 'yt-dlp --flat-playlist --print url --print title ' + playlist.url;
-        exec(cmd, (err, stdout) => {
+        execFile('yt-dlp', ['--flat-playlist', '--print', 'url', '--print', 'title', playlist.url], (err, stdout) => {
             if (gen !== this._streamGen) return;
             if (err) {
                 console.log('stream playlist error:', playlist.name);
@@ -360,15 +417,21 @@ class Player {
             console.log(playlist.name + ': loading', tracks.length, 'tracks');
             this.streamTracks = tracks.map(t => t.title);
             this.emitter.emit('stream-tracks-changed', this.streamTracks);
+            let autoplayStarted = false;
+            const maybeAutoplay = () => {
+                if (!options.autoplay || autoplayStarted) return;
+                autoplayStarted = true;
+                this._mpdCommand('play');
+            };
             tracks.forEach(track => {
-                const streamCmd = 'yt-dlp -g ' + track.url + ' | tail -n 1';
-                exec(streamCmd, (err, stdout) => {
+                execFile('yt-dlp', ['-g', track.url], (err, stdout) => {
                     if (gen !== this._streamGen) return;
                     if (err) return;
-                    stdout = stdout.trim();
-                    if (stdout.length === 0) return;
-                    this._streamUrlToTitle[stdout] = track.title;
-                    this._mpdCommand('add', [stdout]);
+                    const lines = stdout.split(/\r?\n/).filter(line => line.length !== 0);
+                    if (lines.length === 0) return;
+                    const streamUrl = lines[lines.length - 1];
+                    this._rememberStreamUrl(streamUrl, track.title);
+                    this._mpdCommand('add', [streamUrl], maybeAutoplay);
                 });
             });
         });
