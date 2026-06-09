@@ -154,6 +154,16 @@ class Player {
         return false;
     }
 
+    // Re-resolve stream/lofi URLs if they are stale before issuing playback.
+    // Returns true when a refresh was kicked off (caller should not also play).
+    _ensureFreshUrls() {
+        if (this._streamUrlsNeedRefresh()) {
+            this._refreshStreamUrls(true);
+            return true;
+        }
+        return false;
+    }
+
     // --- Title / State ---
 
     _printTitle(title) {
@@ -206,6 +216,16 @@ class Player {
             } else {
                 this._setState(found[1]);
             }
+            // MPD reports playback failures (e.g. expired stream URLs return 403)
+            // via an `error:` line. If our URLs are stale, self-heal by refreshing
+            // instead of letting MPD churn through the whole dead queue. Gated on
+            // _streamUrlsNeedRefresh() so fresh-but-failing URLs don't loop.
+            if (/^error: /im.test(msg) && this._streamUrlsNeedRefresh()) {
+                console.log('mpd playback error with stale stream URLs; refreshing');
+                this._mpdCommand('clearerror');
+                this._refreshStreamUrls(true);
+                return;
+            }
             this._updateTitle();
         });
     }
@@ -232,10 +252,7 @@ class Player {
     // --- Playback ---
 
     start() {
-        if (this._streamUrlsNeedRefresh()) {
-            this._refreshStreamUrls(true);
-            return;
-        }
+        if (this._ensureFreshUrls()) return;
         if (this._checkState('stop') && this.mode === 'likes') {
             this.reload();
         }
@@ -255,10 +272,7 @@ class Player {
     }
 
     next() {
-        if (this._streamUrlsNeedRefresh()) {
-            this._refreshStreamUrls(true);
-            return;
-        }
+        if (this._ensureFreshUrls()) return;
         this._mpdCommand('next');
     }
 
@@ -407,6 +421,9 @@ class Player {
             if (gen !== this._streamGen) return;
             if (err) {
                 console.log('stream playlist error:', playlist.name);
+                // Resolution failed, so the (now-cleared) queue has no fresh URLs;
+                // mark stale so the next play attempt retries instead of giving up.
+                this._streamUrlsExpireAt = 0;
                 return;
             }
             const lines = stdout.trim().split('\n');
@@ -470,6 +487,9 @@ class Player {
     }
 
     playStreamTrack(title) {
+        // Stale URLs would 403 and make MPD skip through the whole dead queue,
+        // so re-resolve first; the refresh autoplays from the top.
+        if (this._ensureFreshUrls()) return;
         const url = Object.keys(this._streamUrlToTitle).find(
             k => this._streamUrlToTitle[k] === title
         );
