@@ -7,6 +7,13 @@ const { Downloader } = require(__dirname + '/downloader');
 const backend = require(__dirname + '/backend');
 const pid = require(__dirname + '/pid');
 
+// This is a tiny control window with no GPU-heavy content. Hardware
+// acceleration only adds a GPU process that can fail to launch (error_code=1002)
+// when the X/compositor stack is restarting (e.g. on xmonad restart), which
+// crashes the app ("GPU process isn't usable. Goodbye."). Software rendering is
+// plenty here and removes that failure mode. Must run before app 'ready'.
+app.disableHardwareAcceleration();
+
 pid.killExisting();
 pid.writePid();
 
