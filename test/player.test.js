@@ -261,3 +261,162 @@ test('a terminated process does not receive SIGKILL after it has exited', t => {
     t.mock.timers.tick(1000);
     assert.deepEqual(child.signals, ['SIGTERM']);
 });
+
+test('selecting track 302 resolves it immediately alongside four background jobs and reuses its URL', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    processes.calls[0].finish(null, playlistOutput(302));
+    player.playStreamTrack('Track 301');
+    assert.equal(processes.calls.length, 6);
+    assert.equal(processes.active.size, 5);
+    assert.deepEqual(processes.calls[5].args, ['-g', 'https://example.com/track/301']);
+    for (const child of processes.calls.slice(1, 5)) assert.deepEqual(child.signals, []);
+
+    processes.calls[5].finish(null, 'https://example.com/audio/301\n');
+    const count = processes.calls.length;
+    player.playStreamTrack('Track 301');
+    assert.equal(processes.calls.length, count, 'reuse the extraction while waiting for MPD');
+    assert.equal(commands.filter(c => c.name === 'play').length, 0);
+    commands.find(c => c.name === 'add').callback(null);
+    commands.find(c => c.name === 'playlistfind').callback(null, 'Pos: 0\n');
+    assert.deepEqual(commands.find(c => c.name === 'play').args, ['0']);
+    assert.equal(processes.active.size, 4, 'background retrieval continues');
+
+    player.playStreamTrack('Track 301');
+    assert.equal(processes.calls.length, count, 'ready tracks must not be extracted again');
+    commands.findLast(c => c.name === 'playlistfind').callback(null, 'Pos: 0\n');
+    assert.equal(commands.filter(c => c.name === 'play').length, 2);
+    assert.equal(processes.peak, 5);
+    while (processes.active.size > 0) {
+        const child = processes.active.values().next().value;
+        child.finish(null, `https://example.com/audio/background/${processes.calls.indexOf(child)}\n`);
+        commands.findLast(c => c.name === 'add').callback(null);
+    }
+    assert.equal(processes.calls.length, 303, 'each track is extracted exactly once');
+    assert.equal(commands.filter(c => c.name === 'add').length, 302);
+});
+
+test('selecting a track already being resolved does not launch a duplicate process', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    processes.calls[0].finish(null, playlistOutput(302));
+    player.playStreamTrack('Track 0');
+    assert.equal(processes.calls.length, 5);
+    processes.calls[1].finish(null, 'https://example.com/audio/0\n');
+    commands.find(c => c.name === 'add').callback(null);
+    commands.find(c => c.name === 'playlistfind').callback(null, 'Pos: 0\n');
+    assert.equal(commands.filter(c => c.name === 'play').length, 1);
+    assert.equal(processes.peak, 4);
+});
+
+test('rapid track selections prioritize the latest choice and use only one foreground slot', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    processes.calls[0].finish(null, playlistOutput(302));
+    player.playStreamTrack('Track 301');
+    player.playStreamTrack('Track 300');
+    player.playStreamTrack('Track 299');
+    assert.equal(processes.calls.length, 6);
+    processes.calls[5].finish(null, 'https://example.com/audio/301\n');
+    commands.find(c => c.name === 'add').callback(null);
+    assert.equal(commands.filter(c => c.name === 'play').length, 0);
+    assert.equal(processes.calls.length, 7);
+    assert.deepEqual(processes.calls[6].args, ['-g', 'https://example.com/track/299']);
+    processes.calls[6].finish(null, 'https://example.com/audio/299\n');
+    commands.findLast(c => c.name === 'add').callback(null);
+    commands.findLast(c => c.name === 'playlistfind').callback(null, 'Pos: 1\n');
+    assert.deepEqual(commands.find(c => c.name === 'play').args, ['1']);
+    assert.equal(processes.peak, 5);
+    processes.calls[1].finish(null, 'https://example.com/audio/0\n');
+    assert.deepEqual(processes.calls[7].args, ['-g', 'https://example.com/track/4']);
+});
+
+for (const stopBeforeReady of [false, true]) {
+    test(`play requested before the playlist loads ${stopBeforeReady ? 'respects a later stop' : 'starts as soon as the first track is ready'}`, t => {
+        const { player, processes, commands } = createPlayer(t);
+        player.selectPlaylist('calm-jazz');
+        player.start();
+        assert.equal(commands.filter(c => c.name === 'play').length, 0);
+        processes.calls[0].finish(null, playlistOutput(302));
+        processes.calls[1].finish(null, 'https://example.com/audio/first\n');
+        if (stopBeforeReady) player.stop();
+        commands.find(c => c.name === 'add').callback(null);
+        const lookup = commands.find(c => c.name === 'playlistfind');
+        if (lookup) lookup.callback(null, 'Pos: 0\n');
+        assert.equal(commands.filter(c => c.name === 'play').length, stopBeforeReady ? 0 : 1);
+        assert.equal(processes.active.size, 4);
+    });
+}
+
+test('mode changes cancel the foreground slot as well as all background work', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    processes.calls[0].finish(null, playlistOutput(302));
+    player.playStreamTrack('Track 301');
+    assert.equal(processes.active.size, 5);
+    player.setMode('likes');
+    for (const child of [...processes.active]) {
+        assert.deepEqual(child.signals, ['SIGTERM']);
+        child.finish(null, 'https://example.com/stale\n');
+    }
+    assert.equal(processes.calls.length, 6);
+    assert.equal(processes.active.size, 0);
+    assert.equal(commands.filter(c => c.name === 'add' || c.name === 'play').length, 0);
+});
+
+test('a failed selected track can be retried through the foreground slot', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    processes.calls[0].finish(null, playlistOutput(302));
+    player.playStreamTrack('Track 301');
+    processes.calls[5].finish(new Error('temporary failure'));
+    player.playStreamTrack('Track 301');
+    assert.equal(processes.calls.length, 7);
+    assert.deepEqual(processes.calls[6].args, ['-g', 'https://example.com/track/301']);
+    processes.calls[6].finish(null, 'https://example.com/audio/retry\n');
+    commands.find(c => c.name === 'add').callback(null);
+    commands.find(c => c.name === 'playlistfind').callback(null, 'Pos: 0\n');
+    assert.equal(commands.filter(c => c.name === 'play').length, 1);
+});
+
+test('autoplay continues with another track when the first extraction fails', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    player.start();
+    processes.calls[0].finish(null, playlistOutput(302));
+    processes.calls[1].finish(new Error('unavailable'));
+    processes.calls[2].finish(null, 'https://example.com/audio/second\n');
+    commands.find(c => c.name === 'add').callback(null);
+    assert.equal(commands.filter(c => c.name === 'play').length, 1);
+});
+
+test('a delayed MPD lookup cannot play an earlier selection or restart playback after stop', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    processes.calls[0].finish(null, playlistOutput(302));
+    player.playStreamTrack('Track 301');
+    processes.calls[5].finish(null, 'https://example.com/audio/301\n');
+    commands.find(c => c.name === 'add').callback(null);
+    const oldLookup = commands.find(c => c.name === 'playlistfind');
+    player.playStreamTrack('Track 300');
+    oldLookup.callback(null, 'Pos: 0\n');
+    assert.equal(commands.filter(c => c.name === 'play').length, 0);
+    processes.calls[6].finish(null, 'https://example.com/audio/300\n');
+    commands.findLast(c => c.name === 'add').callback(null);
+    const latestLookup = commands.findLast(c => c.name === 'playlistfind');
+    player.stop();
+    latestLookup.callback(null, 'Pos: 1\n');
+    assert.equal(commands.filter(c => c.name === 'play').length, 0);
+});
+
+test('stop returns a queued selection to background loading', t => {
+    const { player, processes } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    processes.calls[0].finish(null, playlistOutput(302));
+    player.playStreamTrack('Track 301');
+    player.playStreamTrack('Track 300');
+    player.stop();
+    processes.calls[5].finish(null, 'https://example.com/audio/301\n');
+    assert.equal(processes.calls.length, 6);
+    assert.equal(processes.active.size, 4);
+});

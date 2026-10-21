@@ -38,6 +38,9 @@ class Player {
         this._streamUrlsExpireAt = 0;
         this._streamGen = 0;
         this._streamResolver = new StreamResolver();
+        this._streamTrackJobs = [];
+        this._pendingStreamTrack = null;
+        this._streamAutoplay = false;
         this._random = true;
 
         this.emitter = new EventEmitter();
@@ -130,6 +133,9 @@ class Player {
     _cancelStreamResolution() {
         ++this._streamGen;
         this._streamResolver.cancel();
+        this._streamTrackJobs = [];
+        this._pendingStreamTrack = null;
+        this._streamAutoplay = false;
         return this._streamGen;
     }
 
@@ -260,6 +266,10 @@ class Player {
 
     start() {
         if (this._ensureFreshUrls()) return;
+        if (this.mode === 'stream' && (this._pendingStreamTrack || !this._streamTrackJobs.some(track => track.ready))) {
+            this._streamAutoplay = true;
+            return;
+        }
         if (this._checkState('stop') && this.mode === 'likes') {
             this.reload();
         }
@@ -267,6 +277,9 @@ class Player {
     }
 
     stop() {
+        this._pendingStreamTrack = null;
+        this._streamAutoplay = false;
+        this._streamResolver.prioritize(null);
         this._mpdCommand('stop');
     }
 
@@ -418,6 +431,7 @@ class Player {
         this.mode = 'stream';
         this.currentPlaylist = playlist.name;
         const gen = this._cancelStreamResolution();
+        this._streamAutoplay = !!options.autoplay;
         this._resetStreamExpiry();
         this.emitter.emit('state-changed', this.getState());
         this.streamTracks = [];
@@ -439,24 +453,31 @@ class Player {
                 tracks.push({ url: lines[i], title: lines[i + 1] });
             }
             console.log(playlist.name + ': loading', tracks.length, 'tracks');
+            this._streamTrackJobs = tracks;
             this.streamTracks = tracks.map(t => t.title);
             this.emitter.emit('stream-tracks-changed', this.streamTracks);
-            let autoplayStarted = false;
-            const maybeAutoplay = () => {
-                if (gen !== this._streamGen || !options.autoplay || autoplayStarted) return;
-                autoplayStarted = true;
-                this._mpdCommand('play');
-            };
-            tracks.forEach(track => {
-                this._streamResolver.exec(['-g', track.url], (err, stdout) => {
-                    if (gen !== this._streamGen) return;
-                    if (err) return;
-                    const lines = stdout.split(/\r?\n/).filter(line => line.length !== 0);
-                    if (lines.length === 0) return;
-                    const streamUrl = lines[lines.length - 1];
-                    this._rememberStreamUrl(streamUrl, track.title);
-                    this._mpdCommand('add', [streamUrl], maybeAutoplay);
-                });
+            tracks.forEach(track => this._queueStreamTrack(track, gen));
+        });
+    }
+
+    _queueStreamTrack(track, gen) {
+        track.job = this._streamResolver.exec(['-g', track.url], (err, stdout) => {
+            if (gen !== this._streamGen) return;
+            track.job = null;
+            if (err) return;
+            const lines = stdout.split(/\r?\n/).filter(line => line.length !== 0);
+            if (lines.length === 0) return;
+            track.streamUrl = lines[lines.length - 1];
+            this._rememberStreamUrl(track.streamUrl, track.title);
+            this._mpdCommand('add', [track.streamUrl], err => {
+                if (err || gen !== this._streamGen) return;
+                track.ready = true;
+                if (this._pendingStreamTrack === track) {
+                    this._playStreamUrl(track.streamUrl, gen, track);
+                } else if (this._streamAutoplay && !this._pendingStreamTrack) {
+                    this._streamAutoplay = false;
+                    this._mpdCommand('play');
+                }
             });
         });
     }
@@ -497,15 +518,31 @@ class Player {
         // Stale URLs would 403 and make MPD skip through the whole dead queue,
         // so re-resolve first; the refresh autoplays from the top.
         if (this._ensureFreshUrls()) return;
+        if (this.mode === 'stream') {
+            const track = this._streamTrackJobs.find(track => track.title === title);
+            if (!track) return;
+            this._pendingStreamTrack = track;
+            this._streamAutoplay = false;
+            if (!track.streamUrl && !track.job) this._queueStreamTrack(track, this._streamGen);
+            this._streamResolver.prioritize(track.job);
+            if (track.ready) this._playStreamUrl(track.streamUrl, this._streamGen, track);
+            return;
+        }
         const url = Object.keys(this._streamUrlToTitle).find(
             k => this._streamUrlToTitle[k] === title
         );
         if (!url) return;
+        this._playStreamUrl(url, this._streamGen);
+    }
+
+    _playStreamUrl(url, gen, track = null) {
         this._mpdCommand('playlistfind', ['file', url], (err, msg) => {
-            if (err) return;
+            if (err || gen !== this._streamGen || (track && this._pendingStreamTrack !== track)) return;
             const found = msg.match(/^Pos: (\d+)$/im);
             if (found && found.length >= 2) {
                 this._mpdCommand('play', [found[1]]);
+                if (track) this._pendingStreamTrack = null;
+                this._streamAutoplay = false;
             }
         });
     }

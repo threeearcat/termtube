@@ -11,7 +11,17 @@ class StreamResolver {
     }
 
     exec(args, callback) {
-        this._pending.push({ args, callback });
+        const job = { args, callback, priority: false };
+        this._pending.push(job);
+        this._drain();
+        return job;
+    }
+
+    prioritize(job) {
+        // Only the latest selection needs the foreground slot. Earlier queued
+        // selections go back to background loading without duplicate requests.
+        for (const pending of this._pending) pending.priority = false;
+        if (this._pending.includes(job)) job.priority = true;
         this._drain();
     }
 
@@ -27,8 +37,16 @@ class StreamResolver {
     }
 
     _drain() {
-        while (this._active.size < this._concurrency && this._pending.length > 0) {
-            const job = this._pending.shift();
+        while (this._pending.length > 0) {
+            const active = [...this._active];
+            let index = active.some(job => job.priority)
+                ? -1 : this._pending.findIndex(job => job.priority);
+            if (index === -1) {
+                if (active.filter(job => !job.priority).length >= this._concurrency) return;
+                index = this._pending.findIndex(job => !job.priority);
+                if (index === -1) return;
+            }
+            const [job] = this._pending.splice(index, 1);
             this._active.add(job);
             job.child = this._execFile('yt-dlp', job.args, (err, stdout, stderr) => {
                 clearTimeout(job.killTimer);
