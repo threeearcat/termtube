@@ -2,8 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
 const { EventEmitter } = require('events');
+const { StreamResolver } = require(__dirname + '/stream-resolver');
 const unix = require(__dirname + '/unix');
 const mpd = require('mpd');
 
@@ -37,6 +37,7 @@ class Player {
         this._streamUrlToTitle = {};
         this._streamUrlsExpireAt = 0;
         this._streamGen = 0;
+        this._streamResolver = new StreamResolver();
         this._random = true;
 
         this.emitter = new EventEmitter();
@@ -383,7 +384,7 @@ class Player {
         this.emitter.emit('state-changed', this.getState());
         this._mpdCommand('clear');
         urls.forEach((url, i) => {
-            execFile('yt-dlp', ['--print', '%(title)s', '-g', url], (err, stdout) => {
+            this._streamResolver.exec(['--print', '%(title)s', '-g', url], (err, stdout) => {
                 if (gen !== this._streamGen) return;
                 const lines = err ? [] : stdout.trim().split('\n');
                 if (lines.length < 2) {
@@ -417,7 +418,7 @@ class Player {
         this._streamUrlToTitle = {};
         this.emitter.emit('stream-tracks-changed', this.streamTracks);
         this._mpdCommand('clear');
-        execFile('yt-dlp', ['--flat-playlist', '--print', 'url', '--print', 'title', playlist.url], (err, stdout) => {
+        this._streamResolver.exec(['--flat-playlist', '--print', 'url', '--print', 'title', playlist.url], (err, stdout) => {
             if (gen !== this._streamGen) return;
             if (err) {
                 console.log('stream playlist error:', playlist.name);
@@ -441,7 +442,7 @@ class Player {
                 this._mpdCommand('play');
             };
             tracks.forEach(track => {
-                execFile('yt-dlp', ['-g', track.url], (err, stdout) => {
+                this._streamResolver.exec(['-g', track.url], (err, stdout) => {
                     if (gen !== this._streamGen) return;
                     if (err) return;
                     const lines = stdout.split(/\r?\n/).filter(line => line.length !== 0);
