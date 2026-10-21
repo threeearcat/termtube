@@ -127,6 +127,12 @@ class Player {
         return this.mpd.sendCommand(this.cmd(cmd, args), callback);
     }
 
+    _cancelStreamResolution() {
+        ++this._streamGen;
+        this._streamResolver.cancel();
+        return this._streamGen;
+    }
+
     _resetStreamExpiry() {
         this._streamUrlsExpireAt = Date.now() + STREAM_URL_FALLBACK_TTL_MS;
     }
@@ -279,7 +285,7 @@ class Player {
 
     reload() {
         this.mode = 'likes';
-        ++this._streamGen;
+        this._cancelStreamResolution();
         this._streamUrlsExpireAt = 0;
         this.emitter.emit('state-changed', this.getState());
         this._mpdCommand('clear');
@@ -367,13 +373,13 @@ class Player {
     _switchToLofi(options = {}) {
         console.log('change mode to lofi');
         this.mode = 'lofi';
-        const gen = ++this._streamGen;
+        const gen = this._cancelStreamResolution();
         this._streamUrlToTitle = {};
         this._resetStreamExpiry();
         const urls = this.lofiURLs.filter(url => url.length > 0);
         let autoplayStarted = false;
         const maybeAutoplay = () => {
-            if (!options.autoplay || autoplayStarted) return;
+            if (gen !== this._streamGen || !options.autoplay || autoplayStarted) return;
             autoplayStarted = true;
             this._mpdCommand('play');
         };
@@ -411,7 +417,7 @@ class Player {
         console.log('change mode to stream:', playlist.name);
         this.mode = 'stream';
         this.currentPlaylist = playlist.name;
-        const gen = ++this._streamGen;
+        const gen = this._cancelStreamResolution();
         this._resetStreamExpiry();
         this.emitter.emit('state-changed', this.getState());
         this.streamTracks = [];
@@ -437,7 +443,7 @@ class Player {
             this.emitter.emit('stream-tracks-changed', this.streamTracks);
             let autoplayStarted = false;
             const maybeAutoplay = () => {
-                if (!options.autoplay || autoplayStarted) return;
+                if (gen !== this._streamGen || !options.autoplay || autoplayStarted) return;
                 autoplayStarted = true;
                 this._mpdCommand('play');
             };

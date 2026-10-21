@@ -19,6 +19,11 @@ function fakeExec() {
         assert.equal(file, 'yt-dlp');
         const child = {
             args,
+            signals: [],
+            kill(signal) {
+                child.signals.push(signal);
+                return true;
+            },
             finish(err = null, stdout = '') {
                 assert.ok(active.delete(child), 'process must finish only once');
                 callback(err, stdout, '');
@@ -121,4 +126,138 @@ test('autoplay can begin with the first resolved track while the rest remain que
     assert.equal(commands.filter(c => c.name === 'play').length, 1);
     assert.equal(processes.active.size, 4);
     assert.equal(processes.calls.length, 6);
+});
+
+for (const mode of ['stream', 'lofi']) {
+    test(`returning from ${mode} to likes terminates running jobs and discards queued ones`, t => {
+        const { player, processes, commands } = createPlayer(t, 8);
+        player.setMode(mode);
+        if (mode === 'stream') processes.calls[0].finish(null, playlistOutput(302));
+        const oldJobs = [...processes.active];
+        const callCount = processes.calls.length;
+        player.setMode('likes');
+        for (const child of oldJobs) {
+            assert.deepEqual(child.signals, ['SIGTERM']);
+            child.finish(null, 'Old title\nhttps://example.com/stale\n');
+        }
+        assert.equal(processes.calls.length, callCount);
+        assert.equal(processes.active.size, 0);
+        assert.equal(commands.filter(c => c.name === 'add').length, 0);
+        assert.deepEqual(player._streamUrlToTitle, {});
+    });
+}
+
+test('switching away while the playlist is being listed cancels the listing', t => {
+    const { player, processes } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    player.setMode('likes');
+    assert.deepEqual(processes.calls[0].signals, ['SIGTERM']);
+    processes.calls[0].finish(null, playlistOutput(302));
+    assert.equal(processes.calls.length, 1);
+    assert.equal(processes.active.size, 0);
+    assert.deepEqual(player.streamTracks, []);
+});
+
+for (const [label, change, expectedPlaylist] of [
+    ['reselecting the playlist', player => player.selectPlaylist('calm-jazz'), 'calm-jazz'],
+    ['selecting another playlist', player => player.selectPlaylist('other'), 'other'],
+    ['refreshing expired URLs', player => {
+        player._streamUrlsExpireAt = 1;
+        player.start();
+    }, 'calm-jazz'],
+]) {
+    test(`${label} cancels old work and loads only the new selection`, t => {
+        const { player, processes, commands } = createPlayer(t);
+        player.selectPlaylist('calm-jazz');
+        processes.calls[0].finish(null, playlistOutput(302));
+        const oldJobs = [...processes.active];
+        change(player);
+        assert.equal(processes.calls.length, 5, 'new work waits for old processes to exit');
+        for (const child of oldJobs) {
+            assert.deepEqual(child.signals, ['SIGTERM']);
+            child.finish(null, 'https://example.com/stale\n');
+        }
+        assert.equal(processes.calls.length, 6, 'only the new listing should have started');
+        assert.equal(commands.filter(c => c.name === 'add').length, 0);
+        assert.equal(player.currentPlaylist, expectedPlaylist);
+        processes.calls[5].finish(null, playlistOutput(2));
+        for (const child of [...processes.active]) {
+            child.finish(null, `https://example.com/fresh/${processes.calls.indexOf(child)}\n`);
+        }
+        assert.equal(commands.filter(c => c.name === 'add').length, 2);
+        assert.equal(processes.peak, 4);
+    });
+}
+
+test('rapid mode changes retain the concurrency cap and discard intermediate selections', t => {
+    const { player, processes } = createPlayer(t, 8);
+    player.selectPlaylist('calm-jazz');
+    processes.calls[0].finish(null, playlistOutput(302));
+    const oldJobs = [...processes.active];
+    for (let i = 0; i < 20; i++) {
+        player.setMode('lofi');
+        player.selectPlaylist('calm-jazz');
+    }
+    assert.equal(processes.calls.length, 5);
+    for (const child of oldJobs) {
+        assert.deepEqual(child.signals, ['SIGTERM'], 'repeated cancellation sends SIGTERM once');
+        child.finish(new Error('terminated'));
+    }
+    assert.equal(processes.calls.length, 6);
+    assert.equal(processes.active.size, 1);
+    assert.ok(processes.calls[5].args.includes('--flat-playlist'));
+    assert.equal(processes.peak, 4);
+    processes.calls[5].finish(null, '');
+});
+
+for (const mode of ['stream', 'lofi']) {
+    test(`a delayed MPD add response cannot autoplay after leaving ${mode}`, t => {
+        const { player, processes, commands } = createPlayer(t, 1);
+        if (mode === 'stream') {
+            player._switchToStream(player.playlists[0], { autoplay: true });
+            processes.calls[0].finish(null, playlistOutput(1));
+            processes.calls[1].finish(null, 'https://example.com/audio\n');
+        } else {
+            player._switchToLofi({ autoplay: true });
+            processes.calls[0].finish(null, 'Lofi title\nhttps://example.com/audio\n');
+        }
+        const add = commands.find(c => c.name === 'add');
+        assert.ok(add);
+        player.setMode('likes');
+        add.callback(null);
+        assert.equal(commands.filter(c => c.name === 'play').length, 0);
+    });
+}
+
+test('a process that ignores SIGTERM is killed after the grace period', t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const processes = fakeExec();
+    const resolver = new StreamResolver(1, processes.run);
+    let callbacks = 0;
+    resolver.exec(['-g', 'https://example.com/old'], () => callbacks++);
+    resolver.cancel();
+    resolver.exec(['-g', 'https://example.com/new'], () => callbacks++);
+    const old = processes.calls[0];
+    assert.deepEqual(old.signals, ['SIGTERM']);
+    assert.equal(processes.calls.length, 1);
+    t.mock.timers.tick(1000);
+    assert.deepEqual(old.signals, ['SIGTERM', 'SIGKILL']);
+    old.finish(new Error('killed'));
+    assert.equal(callbacks, 0);
+    assert.equal(processes.calls.length, 2);
+    assert.equal(processes.peak, 1);
+    processes.calls[1].finish(null, 'https://example.com/fresh\n');
+    assert.equal(callbacks, 1);
+});
+
+test('a terminated process does not receive SIGKILL after it has exited', t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const processes = fakeExec();
+    const resolver = new StreamResolver(1, processes.run);
+    resolver.exec(['-g', 'https://example.com/old'], () => assert.fail('cancelled callback'));
+    resolver.cancel();
+    const child = processes.calls[0];
+    child.finish(new Error('terminated'));
+    t.mock.timers.tick(1000);
+    assert.deepEqual(child.signals, ['SIGTERM']);
 });

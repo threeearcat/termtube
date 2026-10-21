@@ -15,14 +15,26 @@ class StreamResolver {
         this._drain();
     }
 
+    cancel() {
+        this._pending = [];
+        for (const job of this._active) {
+            if (job.cancelled) continue;
+            job.cancelled = true;
+            job.killTimer = setTimeout(() => job.child.kill('SIGKILL'), 1000);
+            job.killTimer.unref();
+            job.child.kill('SIGTERM');
+        }
+    }
+
     _drain() {
         while (this._active.size < this._concurrency && this._pending.length > 0) {
             const job = this._pending.shift();
             this._active.add(job);
-            this._execFile('yt-dlp', job.args, (err, stdout, stderr) => {
+            job.child = this._execFile('yt-dlp', job.args, (err, stdout, stderr) => {
+                clearTimeout(job.killTimer);
                 this._active.delete(job);
                 try {
-                    job.callback(err, stdout, stderr);
+                    if (!job.cancelled) job.callback(err, stdout, stderr);
                 } finally {
                     this._drain();
                 }
