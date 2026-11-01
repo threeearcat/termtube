@@ -420,3 +420,171 @@ test('stop returns a queued selection to background loading', t => {
     assert.equal(processes.calls.length, 6);
     assert.equal(processes.active.size, 4);
 });
+
+test('URL mode can be selected before entering a URL and participates in mode cycling', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.setMode('stream');
+    player.modeChange();
+    assert.equal(player.mode, 'url');
+    assert.equal(player.getState().urlLoading, false);
+    assert.deepEqual(player.streamTracks, []);
+    assert.deepEqual(processes.calls[0].signals, ['SIGTERM']);
+    const count = commands.length;
+    player.start();
+    assert.equal(commands.length, count);
+    player.modeChange();
+    assert.equal(player.mode, 'likes');
+});
+
+test('a live URL resolves its title and audio and autoplays only after MPD accepts it', t => {
+    const { player, processes, commands } = createPlayer(t);
+    const url = 'https://www.youtube.com/live/example';
+    assert.equal(player.playUrl(`  ${url}  `), null);
+    assert.equal(player.mode, 'url');
+    assert.equal(player.currentUrl, url);
+    assert.equal(player.getState().urlLoading, true);
+    assert.ok(processes.calls[0].args.includes('--no-playlist'));
+    assert.ok(processes.calls[0].args.includes('bestaudio/best'));
+    processes.calls[0].finish(null, 'Live radio\r\nhttps://example.com/live-audio\r\n');
+    assert.deepEqual(player.streamTracks, ['Live radio']);
+    assert.equal(player._streamUrlToTitle['https://example.com/live-audio'], 'Live radio');
+    assert.equal(commands.filter(c => c.name === 'play').length, 0);
+    commands.find(c => c.name === 'add').callback(null);
+    assert.equal(player.getState().urlLoading, false);
+    assert.equal(commands.filter(c => c.name === 'play').length, 1);
+
+    player.playStreamTrack('Live radio');
+    assert.equal(processes.calls.length, 1, 'reuse the resolved live URL');
+    commands.find(c => c.name === 'playlistfind').callback(null, 'Pos: 0\n');
+    assert.deepEqual(commands.findLast(c => c.name === 'play').args, ['0']);
+});
+
+test('a URL playlist stays separate from saved playlists and supports prioritized track selection', t => {
+    const { player, processes, commands } = createPlayer(t);
+    const saved = fs.readFileSync(player.playlistsPath, 'utf8');
+    player.playUrl('https://www.youtube.com/watch?v=example&list=custom');
+    assert.ok(processes.calls[0].args.includes('--yes-playlist'));
+    processes.calls[0].finish(null, playlistOutput(302));
+    assert.equal(player.streamTracks.length, 302);
+    assert.equal(processes.active.size, 4);
+    player.playStreamTrack('Track 301');
+    assert.equal(processes.active.size, 5);
+    processes.calls[5].finish(null, 'https://example.com/custom/301\n');
+    commands.find(c => c.name === 'add').callback(null);
+    commands.find(c => c.name === 'playlistfind').callback(null, 'Pos: 0\n');
+    assert.deepEqual(commands.find(c => c.name === 'play').args, ['0']);
+    assert.equal(fs.readFileSync(player.playlistsPath, 'utf8'), saved);
+    assert.equal(player.currentPlaylist, '');
+});
+
+test('invalid URLs preserve the active playback and do not start an extractor', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.selectPlaylist('calm-jazz');
+    const count = commands.length;
+    for (const url of ['', 'not a URL', 'file:///tmp/song.webm', '--exec=command', 'ftp://example.com/live', 'https://user:pass@example.com/live', null, {}]) {
+        assert.equal(player.playUrl(url), 'invalid-url');
+    }
+    assert.equal(player.mode, 'stream');
+    assert.equal(player.currentPlaylist, 'calm-jazz');
+    assert.equal(player.currentUrl, '');
+    assert.equal(processes.calls.length, 1);
+    assert.deepEqual(processes.calls[0].signals, []);
+    assert.equal(commands.length, count);
+});
+
+for (const url of ['https://www.youtube.com/live/example', 'https://www.youtube.com/playlist?list=custom']) {
+    test(`expired URLs reload the same source in URL mode: ${url}`, t => {
+        const { player, processes, commands } = createPlayer(t);
+        player.playUrl(url);
+        const listing = processes.calls[0].args.includes('--flat-playlist');
+        if (listing) processes.calls[0].finish(null, playlistOutput(1));
+        processes.calls[listing ? 1 : 0].finish(null,
+            listing ? 'https://example.com/audio\n' : 'Live\nhttps://example.com/audio\n');
+        commands.find(c => c.name === 'add').callback(null);
+        player._streamUrlsExpireAt = 1;
+        player.start();
+        assert.equal(player.mode, 'url');
+        assert.equal(player.currentUrl, url);
+        assert.equal(processes.calls.at(-1).args.at(-1), url);
+        assert.equal(processes.calls.at(-1).args.includes('--flat-playlist'), listing);
+        assert.equal(player.getState().urlLoading, true);
+    });
+}
+
+test('replacing a URL cancels old listing, foreground, and background work', t => {
+    const { player, processes, commands } = createPlayer(t);
+    player.playUrl('https://www.youtube.com/playlist?list=old');
+    processes.calls[0].finish(null, playlistOutput(302));
+    player.playStreamTrack('Track 301');
+    const oldJobs = [...processes.active];
+    player.emitter.emit('play-url', 'https://www.youtube.com/live/new');
+    for (const child of oldJobs) {
+        assert.deepEqual(child.signals, ['SIGTERM']);
+        child.finish(null, 'https://example.com/stale\n');
+    }
+    assert.equal(processes.calls.length, 7);
+    assert.equal(commands.filter(c => c.name === 'add' || c.name === 'play').length, 0);
+    assert.deepEqual(player.streamTracks, ['https://www.youtube.com/live/new']);
+    processes.calls[6].finish(null, 'New live\nhttps://example.com/new-audio\n');
+    commands.find(c => c.name === 'add').callback(null);
+    assert.equal(commands.filter(c => c.name === 'play').length, 1);
+});
+
+for (const action of ['stop', 'switch-mode', 'replace-url']) {
+    test(`a late MPD add cannot autoplay an old URL after ${action}`, t => {
+        const { player, processes, commands } = createPlayer(t);
+        player.playUrl('https://www.youtube.com/live/old');
+        processes.calls[0].finish(null, 'Old live\nhttps://example.com/old-audio\n');
+        const add = commands.find(c => c.name === 'add');
+        if (action === 'stop') player.startStop();
+        else if (action === 'switch-mode') player.setMode('likes');
+        else player.playUrl('https://www.youtube.com/live/new');
+        add.callback(null);
+        assert.equal(commands.filter(c => c.name === 'play').length, 0);
+    });
+}
+
+for (const failure of ['live', 'listing', 'empty-playlist', 'all-tracks', 'mpd']) {
+    test(`URL mode reports ${failure} failures and allows retry`, t => {
+        const { player, processes, commands } = createPlayer(t);
+        const playlist = ['listing', 'empty-playlist', 'all-tracks'].includes(failure);
+        const url = playlist ? 'https://www.youtube.com/playlist?list=custom' : 'https://www.youtube.com/live/example';
+        player.playUrl(url);
+        if (failure === 'live' || failure === 'listing') {
+            processes.calls[0].finish(new Error('unavailable'));
+        } else if (failure === 'empty-playlist') {
+            processes.calls[0].finish(null, '');
+        } else if (failure === 'all-tracks') {
+            processes.calls[0].finish(null, playlistOutput(2));
+            processes.calls[1].finish(new Error('unavailable'));
+            assert.equal(player.getState().urlError, '', 'another track may still succeed');
+            processes.calls[2].finish(new Error('unavailable'));
+        } else {
+            processes.calls[0].finish(null, 'Live\nhttps://example.com/audio\n');
+            commands.find(c => c.name === 'add').callback(new Error('MPD rejected URL'));
+        }
+        assert.ok(player.getState().urlError);
+        assert.equal(player.getState().urlLoading, false);
+        const count = processes.calls.length;
+        player.start();
+        assert.equal(processes.calls.length, count + 1);
+        assert.equal(processes.calls.at(-1).args.at(-1), url);
+        assert.equal(player.getState().urlError, '');
+        assert.equal(player.getState().urlLoading, true);
+    });
+}
+
+test('returning to URL mode remembers the URL without selecting or changing a saved playlist', t => {
+    const { player, processes } = createPlayer(t);
+    player.selectPlaylist('other');
+    processes.calls[0].finish(null, '');
+    const url = 'https://www.youtube.com/live/example';
+    player.playUrl(url);
+    player.setMode('likes');
+    processes.calls[1].finish(new Error('terminated'));
+    player.setMode('url');
+    assert.equal(player.currentPlaylist, 'other');
+    assert.equal(player.currentUrl, url);
+    assert.equal(processes.calls[2].args.at(-1), url);
+    assert.equal(player._streamAutoplay, false);
+});

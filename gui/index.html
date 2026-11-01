@@ -15,6 +15,7 @@
                 <div class="mode-option" data-mode="likes">likes</div>
                 <div class="mode-option" data-mode="lofi">lofi</div>
                 <div class="mode-option" data-mode="stream">stream</div>
+                <div class="mode-option" data-mode="url">url</div>
             </div>
         </div>
     </div>
@@ -52,6 +53,14 @@
             <button id="stream-cancel">Cancel</button>
         </div>
         <button id="stream-add-btn">+ Add</button>
+    </div>
+
+    <div id="url-picker" class="hidden">
+        <form id="url-form">
+            <input id="url-input" type="url" placeholder="YouTube live or playlist URL" aria-label="YouTube live or playlist URL" required>
+            <button type="submit">Play</button>
+        </form>
+        <div id="url-feedback" role="status" aria-live="polite"></div>
     </div>
 
     <div id="playlist-header">

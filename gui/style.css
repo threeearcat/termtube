@@ -413,6 +413,64 @@ body {
     animation: shake 0.3s;
 }
 
+#url-picker {
+    padding: 8px 16px;
+    border-top: 1px solid #363650;
+    flex-shrink: 0;
+}
+
+#url-picker.hidden {
+    display: none;
+}
+
+#url-form {
+    display: flex;
+    gap: 6px;
+}
+
+#url-input {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: #e8e8e8;
+    background: #363650;
+    border: 1px solid #444466;
+    border-radius: 4px;
+    outline: none;
+}
+
+#url-input:focus {
+    border-color: #e94560;
+}
+
+#url-form button {
+    padding: 5px 10px;
+    background: #e94560;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#url-form button:hover {
+    background: #d63851;
+}
+
+#url-feedback {
+    font-size: 12px;
+    line-height: 1.4;
+    color: #999;
+}
+
+#url-feedback:not(:empty) {
+    margin-top: 6px;
+}
+
+#url-feedback.error {
+    color: #e94560;
+}
+
 @keyframes shake {
     0%, 100% { transform: translateX(0); }
     25% { transform: translateX(-4px); }

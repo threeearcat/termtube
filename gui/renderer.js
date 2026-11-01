@@ -20,9 +20,25 @@ const streamUrlInput = document.getElementById('stream-url');
 const streamSaveBtn = document.getElementById('stream-save');
 const streamCancelBtn = document.getElementById('stream-cancel');
 const btnRandom = document.getElementById('btn-random');
+const urlPicker = document.getElementById('url-picker');
+const urlForm = document.getElementById('url-form');
+const urlInput = document.getElementById('url-input');
+const urlFeedback = document.getElementById('url-feedback');
 
 let cachedPlaylists = [];
 let cachedCurrentPlaylist = '';
+let cachedCurrentUrl = '';
+let currentMode = 'likes';
+
+urlForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = await window.termtube.playUrl(urlInput.value.trim());
+    if (error) {
+        urlFeedback.textContent = 'Enter a valid HTTP or HTTPS URL.';
+        urlFeedback.classList.add('error');
+        urlInput.focus();
+    }
+});
 
 // Player actions
 btnPlayPause.addEventListener('click', () => {
@@ -129,6 +145,8 @@ function renderStreamList(playlists, currentPlaylist) {
 
 function updateState(state) {
     if (!state) return;
+    const enteringUrlMode = state.mode === 'url' && currentMode !== 'url';
+    currentMode = state.mode;
 
     // Mode
     modeBadge.textContent = state.mode === 'stream' ? state.currentPlaylist || 'stream' : state.mode;
@@ -138,6 +156,14 @@ function updateState(state) {
 
     // Stream picker visibility
     streamPicker.classList.toggle('hidden', state.mode !== 'stream');
+    urlPicker.classList.toggle('hidden', state.mode !== 'url');
+    if (state.currentUrl !== undefined && state.currentUrl !== cachedCurrentUrl) {
+        cachedCurrentUrl = state.currentUrl;
+        urlInput.value = cachedCurrentUrl;
+    }
+    urlFeedback.textContent = state.urlError || (state.urlLoading ? 'Loading…' : '');
+    urlFeedback.classList.toggle('error', !!state.urlError);
+    if (enteringUrlMode) urlInput.focus();
 
     // Update cached playlists
     if (state.playlists) cachedPlaylists = state.playlists;
@@ -160,8 +186,8 @@ function updateState(state) {
     }
 
     // Title
-    if (state.title) {
-        currentTitle.textContent = state.title;
+    if (state.title !== undefined) {
+        currentTitle.textContent = state.title || 'Not playing';
     }
 
     // Random
@@ -170,7 +196,7 @@ function updateState(state) {
     }
 
     // Playlist
-    if (state.mode === 'stream' || state.mode === 'lofi') {
+    if (['stream', 'lofi', 'url'].includes(state.mode)) {
         updateStreamTrackList(state.streamTracks || []);
     } else if (state.videos) {
         updatePlaylist(state.videos);
@@ -216,7 +242,8 @@ searchInput.addEventListener('keydown', function(e) {
 });
 
 document.addEventListener('keydown', function(e) {
-    if (e.key === '/' && document.activeElement !== searchInput) {
+    const editing = e.target.closest('input, textarea, [contenteditable="true"]');
+    if (e.key === '/' && !editing) {
         e.preventDefault();
         searchInput.focus();
     }
@@ -261,12 +288,16 @@ function highlightActiveTrack(title) {
 // Listen for events from main process
 window.termtube.onStateChanged(updateState);
 window.termtube.onTitleChanged(updateTitle);
-window.termtube.onPlaylistChanged(updatePlaylist);
+window.termtube.onPlaylistChanged(videos => {
+    if (currentMode === 'likes') updatePlaylist(videos);
+});
 window.termtube.onPlaylistsChanged(function(playlists) {
     cachedPlaylists = playlists;
     renderStreamList(cachedPlaylists, cachedCurrentPlaylist);
 });
-window.termtube.onStreamTracksChanged(updateStreamTrackList);
+window.termtube.onStreamTracksChanged(tracks => {
+    if (['stream', 'lofi', 'url'].includes(currentMode)) updateStreamTrackList(tracks);
+});
 
 // Initialize
 window.termtube.getState().then(updateState);

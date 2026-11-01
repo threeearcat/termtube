@@ -33,6 +33,8 @@ class Player {
         this.mode = 'likes';
         this._currentTitle = '';
         this.currentPlaylist = '';
+        this.currentUrl = '';
+        this.urlError = '';
         this.streamTracks = [];
         this._streamUrlToTitle = {};
         this._streamUrlsExpireAt = 0;
@@ -75,6 +77,7 @@ class Player {
         this.emitter.on('next', () => this.next());
         this.emitter.on('mode-change', () => this.modeChange());
         this.emitter.on('set-mode', target => this.setMode(target));
+        this.emitter.on('play-url', url => this.playUrl(url));
         this.emitter.on('play-track', filename => this.playTrack(filename));
         this.emitter.on('play-stream-track', title => this.playStreamTrack(title));
         this.emitter.on('remove-playlist', name => this.removePlaylist(name));
@@ -150,7 +153,8 @@ class Player {
     }
 
     _streamUrlsNeedRefresh() {
-        if (this.mode !== 'lofi' && this.mode !== 'stream') return false;
+        if (this.mode === 'url' && !this.currentUrl) return false;
+        if (!['lofi', 'stream', 'url'].includes(this.mode)) return false;
         if (!this._streamUrlsExpireAt) return true;
         return Date.now() + STREAM_URL_REFRESH_MARGIN_MS >= this._streamUrlsExpireAt;
     }
@@ -162,6 +166,10 @@ class Player {
         }
         if (this.mode === 'stream') {
             this._switchToStream(undefined, { autoplay });
+            return true;
+        }
+        if (this.mode === 'url' && this.currentUrl) {
+            this._switchToUrl({ autoplay });
             return true;
         }
         return false;
@@ -198,14 +206,14 @@ class Player {
                 return;
             }
             const file = fileMatch[1];
-            if (this.mode === 'stream' || this.mode === 'lofi') {
+            if (['stream', 'lofi', 'url'].includes(this.mode)) {
                 const mapped = this._streamUrlToTitle[file];
                 if (mapped) {
                     this._printTitle(mapped);
                 } else if (this.mode === 'lofi') {
                     this._printTitle('Playing lofi music');
                 } else {
-                    this._printTitle('Playing ' + this.currentPlaylist);
+                    this._printTitle('Playing ' + (this.mode === 'url' ? this.currentUrl : this.currentPlaylist));
                 }
                 return;
             }
@@ -265,8 +273,9 @@ class Player {
     // --- Playback ---
 
     start() {
+        if (this.mode === 'url' && !this.currentUrl) return;
         if (this._ensureFreshUrls()) return;
-        if (this.mode === 'stream' && (this._pendingStreamTrack || !this._streamTrackJobs.some(track => track.ready))) {
+        if (['stream', 'url'].includes(this.mode) && (this._pendingStreamTrack || !this._streamTrackJobs.some(track => track.ready))) {
             this._streamAutoplay = true;
             return;
         }
@@ -284,7 +293,9 @@ class Player {
     }
 
     startStop() {
-        if (this._checkState('stop') || this._checkState('pause')) {
+        if (this._streamAutoplay || this._pendingStreamTrack) {
+            this.stop();
+        } else if (this._checkState('stop') || this._checkState('pause')) {
             this.start();
         } else {
             this.stop();
@@ -354,12 +365,15 @@ class Player {
             this._switchToLofi();
         } else if (this.mode === 'lofi') {
             this._switchToStream();
+        } else if (this.mode === 'stream') {
+            this._switchToUrl();
         } else {
             this._switchToLikes();
         }
     }
 
     setMode(target) {
+        if (typeof target !== 'string') return;
         if (target.startsWith('stream:')) {
             const name = target.slice(7);
             const pl = this.playlists.find(p => p.name === name);
@@ -371,6 +385,8 @@ class Player {
             this._switchToLofi();
         } else if (target === 'stream') {
             this._switchToStream();
+        } else if (target === 'url') {
+            this._switchToUrl();
         } else {
             this._switchToLikes();
         }
@@ -430,29 +446,74 @@ class Player {
         console.log('change mode to stream:', playlist.name);
         this.mode = 'stream';
         this.currentPlaylist = playlist.name;
+        this._loadStream(playlist, options);
+    }
+
+    // --- Direct URL playback ---
+
+    playUrl(url) {
+        if (typeof url !== 'string') return 'invalid-url';
+        url = url.trim();
+        try {
+            const parsed = new URL(url);
+            if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+                return 'invalid-url';
+            }
+        } catch {
+            return 'invalid-url';
+        }
+        this.currentUrl = url;
+        this._switchToUrl({ autoplay: true });
+        return null;
+    }
+
+    _switchToUrl(options = {}) {
+        this.mode = 'url';
+        this._loadStream(this.currentUrl ? { name: this.currentUrl, url: this.currentUrl } : null, options);
+    }
+
+    _loadStream(source, options = {}) {
         const gen = this._cancelStreamResolution();
         this._streamAutoplay = !!options.autoplay;
         this._resetStreamExpiry();
-        this.emitter.emit('state-changed', this.getState());
         this.streamTracks = [];
         this._streamUrlToTitle = {};
+        this.urlError = '';
+        this._currentTitle = '';
+        this.emitter.emit('title-changed', '');
         this.emitter.emit('stream-tracks-changed', this.streamTracks);
+        this.emitter.emit('state-changed', this.getState());
         this._mpdCommand('clear');
-        this._streamResolver.exec(['--flat-playlist', '--print', 'url', '--print', 'title', playlist.url], (err, stdout) => {
+        if (!source) return;
+        if (this.mode === 'url' && !new URL(source.url).searchParams.get('list')) {
+            const track = { url: source.url, title: source.url, resolveTitle: true };
+            this._streamTrackJobs = [track];
+            this.streamTracks = [track.title];
+            this.emitter.emit('stream-tracks-changed', this.streamTracks);
+            this._queueStreamTrack(track, gen);
+            return;
+        }
+        this._streamResolver.exec(['--flat-playlist', '--yes-playlist', '--print', 'url', '--print', 'title', source.url], (err, stdout) => {
             if (gen !== this._streamGen) return;
             if (err) {
-                console.log('stream playlist error:', playlist.name);
+                console.log('stream playlist error:', source.name);
                 // Resolution failed, so the (now-cleared) queue has no fresh URLs;
                 // mark stale so the next play attempt retries instead of giving up.
                 this._streamUrlsExpireAt = 0;
+                this._reportUrlError();
                 return;
             }
-            const lines = stdout.trim().split('\n');
+            const lines = stdout.trim().split(/\r?\n/);
             const tracks = [];
             for (let i = 0; i + 1 < lines.length; i += 2) {
                 tracks.push({ url: lines[i], title: lines[i + 1] });
             }
-            console.log(playlist.name + ': loading', tracks.length, 'tracks');
+            console.log(source.name + ': loading', tracks.length, 'tracks');
+            if (tracks.length === 0) {
+                this._streamUrlsExpireAt = 0;
+                this._reportUrlError();
+                return;
+            }
             this._streamTrackJobs = tracks;
             this.streamTracks = tracks.map(t => t.title);
             this.emitter.emit('stream-tracks-changed', this.streamTracks);
@@ -461,17 +522,39 @@ class Player {
     }
 
     _queueStreamTrack(track, gen) {
-        track.job = this._streamResolver.exec(['-g', track.url], (err, stdout) => {
+        track.failed = false;
+        const args = track.resolveTitle
+            ? ['--no-playlist', '-f', 'bestaudio/best', '--print', 'title', '-g', track.url]
+            : ['-g', track.url];
+        const failed = () => {
+            track.failed = true;
+            track.streamUrl = null;
+            if (this._streamTrackJobs.every(t => t.failed)) {
+                this._streamUrlsExpireAt = 0;
+                this._reportUrlError();
+            }
+        };
+        track.job = this._streamResolver.exec(args, (err, stdout) => {
             if (gen !== this._streamGen) return;
             track.job = null;
-            if (err) return;
+            if (err) { failed(); return; }
             const lines = stdout.split(/\r?\n/).filter(line => line.length !== 0);
-            if (lines.length === 0) return;
+            if (lines.length < (track.resolveTitle ? 2 : 1)) { failed(); return; }
+            if (track.resolveTitle) {
+                track.title = lines[0];
+                this.streamTracks = this._streamTrackJobs.map(t => t.title);
+                this.emitter.emit('stream-tracks-changed', this.streamTracks);
+            }
             track.streamUrl = lines[lines.length - 1];
             this._rememberStreamUrl(track.streamUrl, track.title);
             this._mpdCommand('add', [track.streamUrl], err => {
-                if (err || gen !== this._streamGen) return;
+                if (gen !== this._streamGen) return;
+                if (err) { failed(); return; }
+                const hadReadyTrack = this._streamTrackJobs.some(t => t.ready);
                 track.ready = true;
+                if (this.mode === 'url' && !hadReadyTrack) {
+                    this.emitter.emit('state-changed', this.getState());
+                }
                 if (this._pendingStreamTrack === track) {
                     this._playStreamUrl(track.streamUrl, gen, track);
                 } else if (this._streamAutoplay && !this._pendingStreamTrack) {
@@ -480,6 +563,12 @@ class Player {
                 }
             });
         });
+    }
+
+    _reportUrlError() {
+        if (this.mode !== 'url') return;
+        this.urlError = 'Unable to play this URL. Check that the live stream or playlist is available and try again.';
+        this.emitter.emit('state-changed', this.getState());
     }
 
     // --- Stream playlist CRUD ---
@@ -518,7 +607,7 @@ class Player {
         // Stale URLs would 403 and make MPD skip through the whole dead queue,
         // so re-resolve first; the refresh autoplays from the top.
         if (this._ensureFreshUrls()) return;
-        if (this.mode === 'stream') {
+        if (this.mode === 'stream' || this.mode === 'url') {
             const track = this._streamTrackJobs.find(track => track.title === title);
             if (!track) return;
             this._pendingStreamTrack = track;
@@ -561,6 +650,9 @@ class Player {
             videos: this.videos,
             playlists: this.playlists,
             currentPlaylist: this.currentPlaylist,
+            currentUrl: this.currentUrl,
+            urlError: this.urlError,
+            urlLoading: this.mode === 'url' && !!this.currentUrl && !this.urlError && !this._streamTrackJobs.some(track => track.ready),
             streamTracks: this.streamTracks,
             random: this._random
         };
