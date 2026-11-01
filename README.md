@@ -2,6 +2,11 @@
 
 Toy YouTube player based on terminal interface
 
+The Electron app keeps a single instance. Launching it again focuses its existing
+window without restarting playback. Session startup can pass `--background` to
+preserve the window's visibility. Duplicate launches, including `--kill`, keep the existing
+instance and do not change its PID file or command socket.
+
 Stream and lofi URL resolution runs up to four yt-dlp processes in the background.
 Selecting a pending playlist track uses one additional foreground slot, without
 waiting for the rest of the playlist. Tracks already being resolved or ready to
