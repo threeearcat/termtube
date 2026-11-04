@@ -79,7 +79,7 @@ class Player {
         this.emitter.on('set-mode', target => this.setMode(target));
         this.emitter.on('play-url', url => this.playUrl(url));
         this.emitter.on('play-track', filename => this.playTrack(filename));
-        this.emitter.on('play-stream-track', title => this.playStreamTrack(title));
+        this.emitter.on('play-stream-track', selection => this.playStreamTrack(selection));
         this.emitter.on('remove-playlist', name => this.removePlaylist(name));
         this.emitter.on('select-playlist', name => this.selectPlaylist(name));
         this.emitter.on('toggle-random', () => this.toggleRandom());
@@ -159,17 +159,18 @@ class Player {
         return Date.now() + STREAM_URL_REFRESH_MARGIN_MS >= this._streamUrlsExpireAt;
     }
 
-    _refreshStreamUrls(autoplay) {
+    _refreshStreamUrls(autoplay, selectedTrack = this._pendingStreamTrack) {
+        const options = { autoplay: autoplay && !selectedTrack, selectedTrack };
         if (this.mode === 'lofi') {
             this._switchToLofi({ autoplay });
             return true;
         }
         if (this.mode === 'stream') {
-            this._switchToStream(undefined, { autoplay });
+            this._switchToStream(undefined, options);
             return true;
         }
         if (this.mode === 'url' && this.currentUrl) {
-            this._switchToUrl({ autoplay });
+            this._switchToUrl(options);
             return true;
         }
         return false;
@@ -475,6 +476,7 @@ class Player {
     _loadStream(source, options = {}) {
         const gen = this._cancelStreamResolution();
         this._streamAutoplay = !!options.autoplay;
+        this._pendingStreamTrack = options.selectedTrack || null;
         this._resetStreamExpiry();
         this.streamTracks = [];
         this._streamUrlToTitle = {};
@@ -488,6 +490,7 @@ class Player {
         if (this.mode === 'url' && !new URL(source.url).searchParams.get('list')) {
             const track = { url: source.url, title: source.url, resolveTitle: true };
             this._streamTrackJobs = [track];
+            if (this._pendingStreamTrack?.url === track.url) this._pendingStreamTrack = track;
             this.streamTracks = [track.title];
             this.emitter.emit('stream-tracks-changed', this.streamTracks);
             this._queueStreamTrack(track, gen);
@@ -515,6 +518,10 @@ class Player {
                 return;
             }
             this._streamTrackJobs = tracks;
+            if (this._pendingStreamTrack) {
+                const selectedUrl = this._pendingStreamTrack.url;
+                this._pendingStreamTrack = tracks.find(track => track.url === selectedUrl) || null;
+            }
             this.streamTracks = tracks.map(t => t.title);
             this.emitter.emit('stream-tracks-changed', this.streamTracks);
             tracks.forEach(track => this._queueStreamTrack(track, gen));
@@ -563,6 +570,7 @@ class Player {
                 }
             });
         });
+        if (this._pendingStreamTrack === track) this._streamResolver.prioritize(track.job);
     }
 
     _reportUrlError() {
@@ -603,20 +611,31 @@ class Player {
         this._switchToStream(pl);
     }
 
-    playStreamTrack(title) {
-        // Stale URLs would 403 and make MPD skip through the whole dead queue,
-        // so re-resolve first; the refresh autoplays from the top.
-        if (this._ensureFreshUrls()) return;
+    playStreamTrack(selection) {
         if (this.mode === 'stream' || this.mode === 'url') {
-            const track = this._streamTrackJobs.find(track => track.title === title);
+            // The GUI sends the playlist index because titles can be identical.
+            // Keep title selection available to command-socket clients.
+            const track = Number.isInteger(selection)
+                ? this._streamTrackJobs[selection]
+                : this._streamTrackJobs.find(track => track.title === selection);
             if (!track) return;
+            if (this._streamUrlsNeedRefresh()) {
+                this._refreshStreamUrls(false, track);
+                return;
+            }
             this._pendingStreamTrack = track;
             this._streamAutoplay = false;
+            // MPD must not continue or advance through other ready tracks while
+            // the selected track is still being resolved or added to its queue.
+            if (!track.ready) this._mpdCommand('stop');
             if (!track.streamUrl && !track.job) this._queueStreamTrack(track, this._streamGen);
             this._streamResolver.prioritize(track.job);
             if (track.ready) this._playStreamUrl(track.streamUrl, this._streamGen, track);
             return;
         }
+        if (this._ensureFreshUrls()) return;
+        const selected = Number.isInteger(selection) ? this.streamTracks[selection] : selection;
+        const title = typeof selected === 'string' ? selected : selected?.title;
         const url = Object.keys(this._streamUrlToTitle).find(
             k => this._streamUrlToTitle[k] === title
         );

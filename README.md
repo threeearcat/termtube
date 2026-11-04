@@ -11,6 +11,8 @@ Stream and lofi URL resolution runs up to four yt-dlp processes in the backgroun
 Selecting a pending playlist track uses one additional foreground slot, without
 waiting for the rest of the playlist. Tracks already being resolved or ready to
 play reuse their existing request or URL.
+Playback waits for the selected track, including when stream URLs need refreshing
+or multiple playlist entries have the same title.
 Switching modes or playlists cancels queued lookups and terminates running ones.
 
 Select **url** from the mode menu, paste a YouTube live stream or playlist URL,

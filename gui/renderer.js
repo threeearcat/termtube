@@ -252,7 +252,7 @@ document.addEventListener('keydown', function(e) {
 function updateStreamTrackList(tracks) {
     playlistCount.textContent = tracks.length;
     playlistEl.innerHTML = '';
-    tracks.forEach(function(track) {
+    tracks.forEach(function(track, index) {
         const title = typeof track === 'string' ? track : track.title;
         const broken = typeof track === 'object' && track.broken;
         const item = document.createElement('div');
@@ -264,7 +264,7 @@ function updateStreamTrackList(tracks) {
         } else {
             item.title = title;
             item.addEventListener('click', function() {
-                window.termtube.playStreamTrack(title);
+                window.termtube.playStreamTrack(index);
             });
         }
         playlistEl.appendChild(item);

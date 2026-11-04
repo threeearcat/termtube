@@ -66,8 +66,8 @@ function start() {
         p.emitter.emit('play-track', filename);
     });
 
-    ipcMain.on('play-stream-track', (_event, title) => {
-        p.emitter.emit('play-stream-track', title);
+    ipcMain.on('play-stream-track', (_event, selection) => {
+        p.emitter.emit('play-stream-track', selection);
     });
 
     ipcMain.on('set-mode', (_event, mode) => {
