@@ -43,16 +43,15 @@ function start(p, d) {
 }
 
 function run(p, d, have) {
-    function exitCallback(options, exitCode) {
-        if (exitCode || exitCode === 0) console.log(`ExitCode ${exitCode}`);
-        if (options.exit) {
-            notifier.notify({ title: APP_NAME, message: 'Exiting...' });
-            process.exit();
-        }
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+        process.on(signal, () => {
+            console.log('Exiting after', signal);
+            process.exit(0);
+        });
     }
-
-    ['SIGINT', 'SIGUSR1', 'SIGUSR2', 'uncaughtException', 'SIGTERM'].forEach(sig => {
-        process.on(sig, exitCallback.bind(null, { exit: true }));
+    process.on('uncaughtException', error => {
+        console.error('Uncaught exception:', error.stack || error);
+        process.exit(1);
     });
 
     const likedIds = new Set();

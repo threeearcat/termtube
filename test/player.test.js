@@ -32,7 +32,7 @@ function setup(t, { count = 302, hold = new Set() } = {}) {
         calls.push(child);
         return child;
     }, { interval: 0, cooldown: 3600000 });
-    const player = new Player(path.join(dir, 'command.sock'), lofi, playlists, new StreamResolver(scheduler));
+    const player = new Player(path.join(dir, 'command.sock'), lofi, playlists, new StreamResolver(scheduler), path.join(dir, 'session.json'));
     player._random = false;
     const commands = [];
     const queue = [];
@@ -378,4 +378,76 @@ test('cached audio can still be selected during a YouTube cooldown', t => {
     assert.deepEqual(queue, ['https://example.com/audio/0']);
     assert.equal(player._streamPlaying, true);
     assert.equal(calls.length, before);
+});
+
+test('a restarted controller restores the selection and refills the queue after natural transitions', t => {
+    const original = setup(t, { count: 3 });
+    original.player.selectPlaylist('rock'); original.list();
+    original.player.playStreamTrack(2); original.resolve(2);
+    const saved = fs.readFileSync(original.player.sessionPath, 'utf8');
+    assert.equal(saved.includes('example.com/audio'), false, 'signed audio URLs must not be persisted');
+
+    const restored = setup(t, { count: 3 });
+    fs.writeFileSync(restored.player.sessionPath, saved);
+    restored.player.mpd.emit('ready');
+    assert.equal(restored.player.mode, 'stream');
+    assert.equal(restored.player.currentPlaylist, 'rock');
+    assert.equal(restored.calls.length, 1, 'reuse metadata without enumerating the playlist again');
+    assert.equal(restored.calls[0].args.at(-1), 'https://example.com/track/2');
+    assert.equal(restored.commands.some(c => ['clear', 'stop'].includes(c.name)), false, 'keep existing MPD audio until resolution completes');
+    restored.resolve(2); restored.resolve(0);
+    restored.end(); restored.resolve(1);
+    assert.deepEqual(restored.queue, ['https://example.com/audio/0', 'https://example.com/audio/1']);
+});
+
+test('stopping playback persists the selection without autoplay on restart', t => {
+    const original = setup(t);
+    original.player.playUrl('https://www.youtube.com/live/example');
+    original.calls[0].finish(null, 'Radio\nhttps://example.com/audio/live\n');
+    original.player.stop();
+    const restored = setup(t);
+    fs.copyFileSync(original.player.sessionPath, restored.player.sessionPath);
+    restored.player.mpd.emit('ready');
+    assert.equal(restored.player.mode, 'url');
+    assert.equal(restored.player.currentUrl, 'https://www.youtube.com/live/example');
+    assert.equal(restored.calls.length, 0);
+    assert.equal(restored.player._streamAutoplay, false);
+    restored.player.start();
+    assert.equal(restored.calls.length, 1);
+});
+
+test('a controller restart preserves the YouTube cooldown instead of issuing more lookups', t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000000 });
+    const original = setup(t);
+    original.player.selectPlaylist('rock'); original.list(); original.player.start();
+    original.calls.at(-1).finish(new Error('HTTP Error 429'));
+    const restored = setup(t);
+    fs.copyFileSync(original.player.sessionPath, restored.player.sessionPath);
+    restored.player.mpd.emit('ready');
+    assert.equal(restored.calls.length, 0);
+    t.mock.timers.tick(3599999);
+    assert.equal(restored.calls.length, 0);
+    t.mock.timers.tick(1);
+    assert.equal(restored.calls.length, 1);
+});
+
+test('MPD reconnection preserves stream mode and recovers an exhausted queue', t => {
+    const { player, list, resolve, end, commands, queue, calls } = setup(t, { count: 2 });
+    player.mpd.emit('ready');
+    player.selectPlaylist('rock'); list(); player.start(); resolve(0); resolve(1);
+    end();
+    const before = commands.length;
+    player.mpd.emit('ready');
+    assert.equal(player.mode, 'stream');
+    assert.equal(commands.slice(before).some(c => ['stop', 'clear'].includes(c.name)), false);
+    assert.equal(queue.length, 2);
+    assert.equal(calls.length, 3);
+});
+
+test('an invalid saved session falls back to a usable likes player', t => {
+    const { player, calls } = setup(t);
+    fs.writeFileSync(player.sessionPath, '{broken');
+    player.mpd.emit('ready');
+    assert.equal(player.mode, 'likes');
+    assert.equal(calls.length, 0);
 });

@@ -7,6 +7,16 @@ window without restarting playback. Session startup can pass `--background` to
 preserve the window's visibility. Duplicate launches, including `--kill`, keep the existing
 instance and do not change its PID file or command socket.
 
+On Linux with a systemd user manager, the first launch starts `termtube.service`.
+The service keeps the controller alive independently of its launcher and restarts
+it after an unexpected exit. Read its logs with
+`journalctl --user -u termtube.service` and stop it with
+`systemctl --user stop termtube.service`.
+Streaming selections and playback intent are saved atomically under
+`${XDG_STATE_HOME:-~/.local/state}/termtube/session.json`. A restarted controller
+resolves fresh audio URLs, resumes the selected track, and prepares its successor.
+Stopped playback stays stopped, and YouTube cooldowns survive restarts.
+
 Playlist selection loads metadata without resolving every track's audio URL.
 Playback prepares only the current song and one successor. MPD transitions to
 the prepared successor directly and consumes finished queue entries. Random
@@ -24,7 +34,7 @@ Unavailable successors are skipped with at most three attempts per transition.
 
 Select **url** from the mode menu, paste a YouTube live stream or playlist URL,
 and press **Play** (or Enter). Playback starts as soon as the first track is
-ready. URLs are kept for the current session without changing saved playlists.
+ready. URLs are kept in playback recovery state without changing saved playlists.
 The mode supports track selection, random playback, and refreshing expired URLs.
 
 Terminal clients can use the same mode through the command socket:

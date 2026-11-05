@@ -10,7 +10,7 @@ const vm = require('node:vm');
 const entry = path.join(__dirname, '..', 'electron.js');
 const source = fs.readFileSync(entry, 'utf8');
 
-function boot({ primary = true, ready = Promise.resolve() } = {}) {
+function boot({ primary = true, ready = Promise.resolve(), handoff = false } = {}) {
     const calls = [];
     const windows = [];
     const app = new EventEmitter();
@@ -48,6 +48,7 @@ function boot({ primary = true, ready = Promise.resolve() } = {}) {
     const modules = {
         electron: { app, BrowserWindow, ipcMain },
         path,
+        './service': { startService() { return handoff; } },
         [path.join(__dirname, '..', 'player')]: { Player },
         [path.join(__dirname, '..', 'downloader')]: { Downloader },
         [path.join(__dirname, '..', 'backend')]: { start() { calls.push('backend'); } },
@@ -71,6 +72,15 @@ test('a duplicate quits before loading the backend or touching the PID, MPD, or 
     const { calls, windows } = boot({ primary: false });
     await Promise.resolve();
     assert.deepEqual(calls, ['lock', 'quit']);
+    assert.equal(windows.length, 0);
+});
+
+test('a launcher hands off to the service before touching playback or the PID file', async () => {
+    const { calls, windows } = boot({ handoff: true });
+    await Promise.resolve();
+    assert.ok(calls.includes('quit'));
+    assert.equal(calls.includes('player'), false);
+    assert.equal(calls.includes('write-pid'), false);
     assert.equal(windows.length, 0);
 });
 

@@ -10,6 +10,7 @@ const mpd = require('mpd');
 const COMMAND_SOCK = '/tmp/command.sock';
 const LOFI_URL_FILE = process.env.HOME + '/.mpd/lofi.lst';
 const PLAYLISTS_PATH = process.env.HOME + '/.termtube/playlists.json';
+const SESSION_PATH = path.join(process.env.XDG_STATE_HOME || path.join(process.env.HOME, '.local/state'), 'termtube/session.json');
 const DEFAULT_PLAYLISTS = [
     { name: 'calm-jazz', url: 'https://www.youtube.com/playlist?list=PL61ZikC3WfojSgt1PeWLSzj9qqXpVpCfA' }
 ];
@@ -28,7 +29,7 @@ function directUrlExpiry(url) {
 }
 
 class Player {
-    constructor(commandSock = COMMAND_SOCK, lofiURLFile = LOFI_URL_FILE, playlistsPath = PLAYLISTS_PATH, resolver = new StreamResolver()) {
+    constructor(commandSock = COMMAND_SOCK, lofiURLFile = LOFI_URL_FILE, playlistsPath = PLAYLISTS_PATH, resolver = new StreamResolver(), sessionPath = SESSION_PATH) {
         this.videos = [];
         this.mode = 'likes';
         this._currentTitle = '';
@@ -51,11 +52,15 @@ class Player {
         this._prefetchFailures = 0;
         this._startFailures = 0;
         this._retryTimer = null;
+        this.sessionPath = sessionPath;
+        this._sessionLoaded = false;
+        this._savedSession = '';
 
         this.emitter = new EventEmitter();
         this._streamResolver.queue.on('blocked', error => {
             console.log(error.message);
             this._scheduleStreamRetry();
+            this._saveSession();
         });
         try {
             this.lofiURLs = fs.readFileSync(lofiURLFile, 'utf-8').split('\n');
@@ -94,6 +99,7 @@ class Player {
         this.emitter.on('remove-playlist', name => this.removePlaylist(name));
         this.emitter.on('select-playlist', name => this.selectPlaylist(name));
         this.emitter.on('toggle-random', () => this.toggleRandom());
+        this.emitter.on('state-changed', () => this._saveSession());
 
         // Launch sockets
         this.handler = unix.handler(this.emitter, commandSock);
@@ -129,10 +135,15 @@ class Player {
             console.log('mpd ready');
             this._mpdReady = true;
             this._mpdRetries = 0;
-            this._mpdCommand('stop');
-            this.reload();
-            this._mpdCommand('random', [this._random ? '1' : '0']);
-            this._mpdCommand('repeat', ['1']);
+            if (!this._sessionLoaded) {
+                this._sessionLoaded = true;
+                if (!this._restoreSession()) {
+                    this._mpdCommand('stop');
+                    this.reload();
+                }
+            } else {
+                this._updateMpdState();
+            }
         });
         this.mpd.on('system-player', () => {
             this._updateMpdState();
@@ -146,6 +157,63 @@ class Player {
 
     _isStreaming() {
         return ['lofi', 'stream', 'url'].includes(this.mode);
+    }
+
+    _saveSession() {
+        if (!this.sessionPath) return;
+        const queue = this._streamResolver.queue;
+        const session = JSON.stringify({
+            mode: this.mode, currentPlaylist: this.currentPlaylist, currentUrl: this.currentUrl,
+            random: this._random,
+            resume: !!(this._streamPlaying || this._pendingStreamTrack || this._streamAutoplay),
+            selected: this._streamTrackJobs.indexOf(this._pendingStreamTrack || this._activeStreamTrack),
+            tracks: this._streamTrackJobs.map(({ url, title, resolveTitle }) => ({ url, title, resolveTitle })),
+            blockedUntil: queue.blockedUntil,
+        });
+        if (session === this._savedSession) return;
+        try {
+            fs.mkdirSync(path.dirname(this.sessionPath), { recursive: true });
+            fs.writeFileSync(this.sessionPath + '.tmp', session, { mode: 0o600 });
+            fs.renameSync(this.sessionPath + '.tmp', this.sessionPath);
+            this._savedSession = session;
+        } catch (error) {
+            console.error('Could not save playback session:', error.code);
+        }
+    }
+
+    _restoreSession() {
+        let session;
+        try {
+            session = JSON.parse(fs.readFileSync(this.sessionPath, 'utf8'));
+        } catch { return false; }
+        if (!session || !['stream', 'lofi', 'url'].includes(session.mode)
+            || !Array.isArray(session.tracks)
+            || !session.tracks.every(track => track && typeof track.url === 'string' && typeof track.title === 'string')
+            || typeof session.currentUrl !== 'string' || typeof session.currentPlaylist !== 'string') return false;
+        this.mode = session.mode;
+        this.currentPlaylist = session.currentPlaylist;
+        this.currentUrl = session.currentUrl;
+        this._random = session.random !== false;
+        const queue = this._streamResolver.queue;
+        if (Number.isFinite(session.blockedUntil) && session.blockedUntil > Date.now()) {
+            queue.blockedUntil = session.blockedUntil;
+            queue.blockError = Object.assign(new Error('YouTube requests paused for one hour after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
+        }
+        // Keep MPD's existing audio until a fresh URL is ready. Signed audio
+        // URLs are deliberately not persisted in the session file.
+        this._configureMpdQueue(true);
+        this._streamTrackJobs = session.tracks.map(({ url, title, resolveTitle }) => ({ url, title, resolveTitle: !!resolveTitle }));
+        const selected = this._streamTrackJobs[session.selected];
+        this._activeStreamTrack = selected || null;
+        this._streamAutoplay = !!session.resume;
+        this._emitStreamTracks();
+        if (session.resume) {
+            if (selected) this._requestStreamTrack(selected);
+            else this.start();
+        } else {
+            this._mpdCommand('stop');
+        }
+        return true;
     }
 
     _cancelStreamResolution() {
@@ -214,6 +282,7 @@ class Player {
                     this._activeStreamTrack = track;
                     this._nextStreamTrack = null;
                     this._prefetchFailures = 0;
+                    this._saveSession();
                     this._prepareNextStreamTrack();
                 }
                 const mapped = this._streamUrlToTitle[file];
@@ -322,6 +391,7 @@ class Player {
         this._streamResolver.cancel();
         for (const track of this._streamTrackJobs) track.job = null;
         this._streamListLoading = false;
+        this._saveSession();
         this._mpdCommand('stop');
     }
 
@@ -629,6 +699,7 @@ class Player {
                 this._pendingStreamTrack = null;
                 this._streamAutoplay = false;
                 this._streamPlaying = true;
+                this._saveSession();
                 this._prepareNextStreamTrack();
             });
         });

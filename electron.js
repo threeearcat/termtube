@@ -12,7 +12,9 @@ app.disableHardwareAcceleration();
 
 // Acquire the lock before touching the PID file, MPD, or command socket.
 if (app.requestSingleInstanceLock()) {
-    start();
+    const { startService } = require('./service');
+    if (startService(app)) app.quit();
+    else start();
 } else {
     app.quit();
 }
