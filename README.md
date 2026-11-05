@@ -7,13 +7,20 @@ window without restarting playback. Session startup can pass `--background` to
 preserve the window's visibility. Duplicate launches, including `--kill`, keep the existing
 instance and do not change its PID file or command socket.
 
-Stream and lofi URL resolution runs up to four yt-dlp processes in the background.
-Selecting a pending playlist track uses one additional foreground slot, without
-waiting for the rest of the playlist. Tracks already being resolved or ready to
-play reuse their existing request or URL.
-Playback waits for the selected track, including when stream URLs need refreshing
-or multiple playlist entries have the same title.
-Switching modes or playlists cancels queued lookups and terminates running ones.
+Playlist selection loads metadata without resolving every track's audio URL.
+Playback prepares only the current song and one successor. MPD transitions to
+the prepared successor directly and consumes finished queue entries. Random
+playback still chooses from the full playlist. Selecting another song keeps the
+current audio playing until the selected song is ready; cached URLs are reused
+until they need refreshing. Lofi uses the same on-demand loading.
+
+Playback lookups and likes downloads share one yt-dlp process slot, with ten
+seconds between processes and one second between extraction requests. Playback
+takes priority over background downloads. Likes downloads run one at a time and
+deduplicate pending videos. A YouTube rate limit or bot check pauses all lookups
+for one hour, preserves current playback, and retries pending playback after the
+pause. Stop and mode changes cancel pending playback and automatic recovery.
+Unavailable successors are skipped with at most three attempts per transition.
 
 Select **url** from the mode menu, paste a YouTube live stream or playlist URL,
 and press **Play** (or Enter). Playback starts as soon as the first track is

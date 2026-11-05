@@ -3,8 +3,9 @@
 const fs = require('fs');
 const https = require('https');
 const { exec } = require('child_process');
+const { StreamResolver } = require('./stream-resolver');
 
-const MAX_DOWNLOADING = 10;
+const MAX_DOWNLOADING = 1;
 
 function validate(filepath) {
     return new Promise((resolve, reject) => {
@@ -36,7 +37,8 @@ function download(url, dest) {
                 });
                 response.pipe(file);
             } else if (response.statusCode === 302 || response.statusCode === 301) {
-                download(response.headers.location, dest).then(() => resolve());
+                response.resume();
+                download(response.headers.location, dest).then(resolve, reject);
             } else {
                 reject(`Server responded with ${response.statusCode}: ${response.statusMessage}`);
             }
@@ -49,54 +51,70 @@ function download(url, dest) {
 }
 
 class Downloader {
-    constructor() {
+    constructor(resolver = new StreamResolver(), transfer = download) {
         this.downloading = 0;
+        this.resolver = resolver;
+        this.pending = [];
+        this.ids = new Set();
+        this.transfer = transfer;
     }
 
     _download(id, title, callback) {
-        if (this.downloading >= MAX_DOWNLOADING) {
-            setTimeout(() => this._download(id, title, callback), 60 * 1000);
-            return;
-        }
         const dest = process.env.HOME + '/.music/' + id + '.webm';
         this.downloading += 1;
-        if (fs.existsSync(dest)) {
+        const finish = success => {
             this.downloading -= 1;
-            callback(id, title, false);
+            this.ids.delete(id);
+            callback(id, title, success);
+            this._drain();
+        };
+        if (fs.existsSync(dest)) {
+            finish(false);
             return;
         }
 
         console.log('downloading', id, title);
 
-        const cmd = 'yt-dlp -g https://youtu.be/' + id;
-        exec(cmd, (err, stdout) => {
+        this.resolver.exec(['--no-playlist', '-f', 'bestaudio/best', '-g', 'https://youtu.be/' + id], (err, stdout) => {
             if (err) {
-                console.log('download failed', err);
-                this.downloading -= 1;
-                callback(id, title, false);
+                console.log('download failed:', title, err.code === 'YOUTUBE_BLOCKED' ? err.message : 'URL extraction failed');
+                finish(false);
                 return;
             }
             const lines = stdout.split(/\r?\n/).filter(line => line.length !== 0);
             if (lines.length === 0) {
-                this.downloading -= 1;
-                callback(id, title, false);
+                finish(false);
                 return;
             }
             const musicUrl = lines[lines.length - 1];
-            download(musicUrl, dest).then(() => {
+            this.transfer(musicUrl, dest).then(() => {
                 console.log('download done', title);
-                callback(id, title, true);
-            }).catch(err => {
+                finish(true);
+            }, err => {
                 console.log('failed downloading', title, err);
-                callback(id, title, false);
-            }).finally(() => {
-                this.downloading -= 1;
+                finish(false);
             });
-        });
+        }, -1);
+    }
+
+    _drain() {
+        if (this.resolver.queue.getError()) {
+            for (const { video, callback } of this.pending.splice(0)) {
+                this.ids.delete(video.id);
+                callback(video.id, video.snippet.title, false);
+            }
+            return;
+        }
+        if (this.downloading >= MAX_DOWNLOADING || !this.pending.length) return;
+        const { video, callback } = this.pending.shift();
+        this._download(video.id, video.snippet.title, callback);
     }
 
     download(video, callback) {
-        this._download(video.id, video.snippet.title, callback);
+        if (this.ids.has(video.id)) return;
+        this.ids.add(video.id);
+        this.pending.push({ video, callback });
+        this._drain();
     }
 }
 

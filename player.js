@@ -28,7 +28,7 @@ function directUrlExpiry(url) {
 }
 
 class Player {
-    constructor(commandSock = COMMAND_SOCK, lofiURLFile = LOFI_URL_FILE, playlistsPath = PLAYLISTS_PATH) {
+    constructor(commandSock = COMMAND_SOCK, lofiURLFile = LOFI_URL_FILE, playlistsPath = PLAYLISTS_PATH, resolver = new StreamResolver()) {
         this.videos = [];
         this.mode = 'likes';
         this._currentTitle = '';
@@ -37,15 +37,26 @@ class Player {
         this.urlError = '';
         this.streamTracks = [];
         this._streamUrlToTitle = {};
-        this._streamUrlsExpireAt = 0;
         this._streamGen = 0;
-        this._streamResolver = new StreamResolver();
+        this._streamResolver = resolver;
         this._streamTrackJobs = [];
         this._pendingStreamTrack = null;
         this._streamAutoplay = false;
         this._random = true;
+        this._activeStreamTrack = null;
+        this._nextStreamTrack = null;
+        this._streamPlaying = false;
+        this._streamListLoading = false;
+        this._playRequest = 0;
+        this._prefetchFailures = 0;
+        this._startFailures = 0;
+        this._retryTimer = null;
 
         this.emitter = new EventEmitter();
+        this._streamResolver.queue.on('blocked', error => {
+            console.log(error.message);
+            this._scheduleStreamRetry();
+        });
         try {
             this.lofiURLs = fs.readFileSync(lofiURLFile, 'utf-8').split('\n');
         } catch {
@@ -133,57 +144,44 @@ class Player {
         return this.mpd.sendCommand(this.cmd(cmd, args), callback);
     }
 
+    _isStreaming() {
+        return ['lofi', 'stream', 'url'].includes(this.mode);
+    }
+
     _cancelStreamResolution() {
         ++this._streamGen;
+        ++this._playRequest;
+        clearTimeout(this._retryTimer);
+        this._retryTimer = null;
         this._streamResolver.cancel();
         this._streamTrackJobs = [];
         this._pendingStreamTrack = null;
+        this._activeStreamTrack = null;
+        this._nextStreamTrack = null;
         this._streamAutoplay = false;
+        this._streamPlaying = false;
+        this._streamListLoading = false;
+        this._streamUrlToTitle = {};
         return this._streamGen;
     }
 
-    _resetStreamExpiry() {
-        this._streamUrlsExpireAt = Date.now() + STREAM_URL_FALLBACK_TTL_MS;
+    _trackUrlIsFresh(track) {
+        return !!track?.streamUrl && Date.now() + STREAM_URL_REFRESH_MARGIN_MS < track.expiresAt;
     }
 
-    _rememberStreamUrl(url, title) {
-        this._streamUrlToTitle[url] = title;
-        const expiresAt = directUrlExpiry(url) || (Date.now() + STREAM_URL_FALLBACK_TTL_MS);
-        this._streamUrlsExpireAt = Math.min(this._streamUrlsExpireAt || expiresAt, expiresAt);
-    }
-
-    _streamUrlsNeedRefresh() {
-        if (this.mode === 'url' && !this.currentUrl) return false;
-        if (!['lofi', 'stream', 'url'].includes(this.mode)) return false;
-        if (!this._streamUrlsExpireAt) return true;
-        return Date.now() + STREAM_URL_REFRESH_MARGIN_MS >= this._streamUrlsExpireAt;
-    }
-
-    _refreshStreamUrls(autoplay, selectedTrack = this._pendingStreamTrack) {
-        const options = { autoplay: autoplay && !selectedTrack, selectedTrack };
-        if (this.mode === 'lofi') {
-            this._switchToLofi({ autoplay });
-            return true;
-        }
-        if (this.mode === 'stream') {
-            this._switchToStream(undefined, options);
-            return true;
-        }
-        if (this.mode === 'url' && this.currentUrl) {
-            this._switchToUrl(options);
-            return true;
-        }
-        return false;
-    }
-
-    // Re-resolve stream/lofi URLs if they are stale before issuing playback.
-    // Returns true when a refresh was kicked off (caller should not also play).
-    _ensureFreshUrls() {
-        if (this._streamUrlsNeedRefresh()) {
-            this._refreshStreamUrls(true);
-            return true;
-        }
-        return false;
+    _scheduleStreamRetry() {
+        if (!this._isStreaming() || this._retryTimer) return;
+        if (!this._streamPlaying && !this._pendingStreamTrack && !this._streamAutoplay) return;
+        const gen = this._streamGen;
+        const wait = Math.max(1, this._streamResolver.queue.blockedUntil - Date.now());
+        this._retryTimer = setTimeout(() => {
+            this._retryTimer = null;
+            if (gen !== this._streamGen || !this._isStreaming()) return;
+            if (this._pendingStreamTrack) this._requestStreamTrack(this._pendingStreamTrack);
+            else if (this._streamPlaying) this._prepareNextStreamTrack();
+            else if (this._streamAutoplay) this.start();
+        }, wait);
+        this._retryTimer.unref();
     }
 
     // --- Title / State ---
@@ -199,8 +197,10 @@ class Player {
     }
 
     _updateTitle() {
+        const gen = this._streamGen;
+        const request = this._playRequest;
         this._mpdCommand('currentsong', [], (err, msg) => {
-            if (err) { console.log('currentsong error:', err.message); return; }
+            if (err || gen !== this._streamGen || request !== this._playRequest) return;
             const fileMatch = msg.match(/^file: (.+)$/im);
             if (!fileMatch || !fileMatch[1]) {
                 this._printTitle('Unknown title');
@@ -208,6 +208,14 @@ class Player {
             }
             const file = fileMatch[1];
             if (['stream', 'lofi', 'url'].includes(this.mode)) {
+                const track = this._streamTrackJobs.find(track => track.streamUrl === file);
+                if (track && track !== this._activeStreamTrack && this._streamPlaying && !this._pendingStreamTrack) {
+                    if (this._activeStreamTrack) this._activeStreamTrack.queued = false;
+                    this._activeStreamTrack = track;
+                    this._nextStreamTrack = null;
+                    this._prefetchFailures = 0;
+                    this._prepareNextStreamTrack();
+                }
                 const mapped = this._streamUrlToTitle[file];
                 if (mapped) {
                     this._printTitle(mapped);
@@ -230,22 +238,32 @@ class Player {
     }
 
     _updateMpdState() {
+        const gen = this._streamGen;
+        const request = this._playRequest;
         this._mpdCommand('status', [], (err, msg) => {
-            if (err) { console.log('status error:', err.message); return; }
-            const found = msg.match(/^state: ([a-z]*)$/im);
-            if (!found || found.length < 2) {
-                this._setState('stop');
-            } else {
-                this._setState(found[1]);
-            }
-            // MPD reports playback failures (e.g. expired stream URLs return 403)
-            // via an `error:` line. If our URLs are stale, self-heal by refreshing
-            // instead of letting MPD churn through the whole dead queue. Gated on
-            // _streamUrlsNeedRefresh() so fresh-but-failing URLs don't loop.
-            if (/^error: /im.test(msg) && this._streamUrlsNeedRefresh()) {
-                console.log('mpd playback error with stale stream URLs; refreshing');
+            if (err || gen !== this._streamGen || request !== this._playRequest) return;
+            const state = msg.match(/^state: ([a-z]*)$/im)?.[1] || 'stop';
+            this._setState(state);
+            if (this._isStreaming() && /^error: /im.test(msg)) {
+                const track = this._pendingStreamTrack || this._activeStreamTrack;
                 this._mpdCommand('clearerror');
-                this._refreshStreamUrls(true);
+                if (track?.streamUrl && !this._trackUrlIsFresh(track)) {
+                    track.streamUrl = null;
+                    this._requestStreamTrack(track);
+                } else {
+                    // Fresh URLs that fail must not cause an unbounded retry loop.
+                    this._streamPlaying = false;
+                    this._streamAutoplay = false;
+                    this._reportUrlError();
+                }
+                return;
+            }
+            if (this._isStreaming() && state === 'stop' && this._streamPlaying && !this._pendingStreamTrack) {
+                // The song ended before its successor was ready. Reuse the
+                // pending prefetch instead of restarting the whole playlist.
+                this._streamPlaying = false;
+                const next = this._nextStreamTrack || this._chooseStreamTrack(this._activeStreamTrack);
+                if (next) this._requestStreamTrack(next);
                 return;
             }
             this._updateTitle();
@@ -266,52 +284,67 @@ class Player {
 
     toggleRandom() {
         this._random = !this._random;
-        this._mpdCommand('random', [this._random ? '1' : '0']);
-        console.log('random:', this._random);
+        // Keep the prepared successor; future choices use the new setting.
+        if (!this._isStreaming()) {
+            this._mpdCommand('random', [this._random ? '1' : '0']);
+        }
         this.emitter.emit('state-changed', this.getState());
     }
 
     // --- Playback ---
 
     start() {
-        if (this.mode === 'url' && !this.currentUrl) return;
-        if (this._ensureFreshUrls()) return;
-        if (['stream', 'url'].includes(this.mode) && (this._pendingStreamTrack || !this._streamTrackJobs.some(track => track.ready))) {
+        if (this._isStreaming()) {
+            if (this.mode === 'url' && !this.currentUrl) return;
             this._streamAutoplay = true;
+            if (this._streamListLoading) return;
+            if (!this._streamTrackJobs.length) {
+                if (this.mode === 'stream') this._switchToStream(undefined, { autoplay: true });
+                else if (this.mode === 'url') this._switchToUrl({ autoplay: true });
+                return;
+            }
+            const track = this._pendingStreamTrack || this._activeStreamTrack || this._chooseStreamTrack();
+            if (track) this._requestStreamTrack(track);
             return;
         }
-        if (this._checkState('stop') && this.mode === 'likes') {
-            this.reload();
-        }
+        if (this._checkState('stop')) this.reload();
         this._mpdCommand('play');
     }
 
     stop() {
+        ++this._playRequest;
+        clearTimeout(this._retryTimer);
+        this._retryTimer = null;
         this._pendingStreamTrack = null;
         this._streamAutoplay = false;
-        this._streamResolver.prioritize(null);
+        this._streamPlaying = false;
+        this._nextStreamTrack = null;
+        this._streamResolver.cancel();
+        for (const track of this._streamTrackJobs) track.job = null;
+        this._streamListLoading = false;
         this._mpdCommand('stop');
     }
 
     startStop() {
-        if (this._streamAutoplay || this._pendingStreamTrack) {
-            this.stop();
-        } else if (this._checkState('stop') || this._checkState('pause')) {
-            this.start();
-        } else {
-            this.stop();
-        }
+        if (this._streamAutoplay || this._pendingStreamTrack || this._streamPlaying) this.stop();
+        else if (this._checkState('stop') || this._checkState('pause')) this.start();
+        else this.stop();
     }
 
     next() {
-        if (this._ensureFreshUrls()) return;
+        if (this._isStreaming()) {
+            if (this._streamListLoading) { this._streamAutoplay = true; return; }
+            const track = this._nextStreamTrack || this._chooseStreamTrack(this._pendingStreamTrack || this._activeStreamTrack);
+            if (track) this._requestStreamTrack(track);
+            return;
+        }
         this._mpdCommand('next');
     }
 
     reload() {
         this.mode = 'likes';
         this._cancelStreamResolution();
-        this._streamUrlsExpireAt = 0;
+        this._configureMpdQueue(false);
         this.emitter.emit('state-changed', this.getState());
         this._mpdCommand('clear');
         this._mpdCommand('update');
@@ -401,42 +434,9 @@ class Player {
     }
 
     _switchToLofi(options = {}) {
-        console.log('change mode to lofi');
         this.mode = 'lofi';
-        const gen = this._cancelStreamResolution();
-        this._streamUrlToTitle = {};
-        this._resetStreamExpiry();
-        const urls = this.lofiURLs.filter(url => url.length > 0);
-        let autoplayStarted = false;
-        const maybeAutoplay = () => {
-            if (gen !== this._streamGen || !options.autoplay || autoplayStarted) return;
-            autoplayStarted = true;
-            this._mpdCommand('play');
-        };
-        // Seed the track list with placeholders so the GUI can show every entry
-        // (titles fill in as they resolve; failures are marked broken).
-        this.streamTracks = urls.map(url => ({ title: url, broken: false }));
-        this.emitter.emit('stream-tracks-changed', this.streamTracks);
-        this.emitter.emit('state-changed', this.getState());
-        this._mpdCommand('clear');
-        urls.forEach((url, i) => {
-            this._streamResolver.exec(['--print', '%(title)s', '-g', url], (err, stdout) => {
-                if (gen !== this._streamGen) return;
-                const lines = err ? [] : stdout.trim().split('\n');
-                if (lines.length < 2) {
-                    console.log('lofi URL is broken:', url);
-                    this.streamTracks[i] = { title: url, broken: true };
-                    this.emitter.emit('stream-tracks-changed', this.streamTracks);
-                    return;
-                }
-                const title = lines[0];
-                const streamUrl = lines[lines.length - 1];
-                this.streamTracks[i] = { title, broken: false };
-                this._rememberStreamUrl(streamUrl, title);
-                this.emitter.emit('stream-tracks-changed', this.streamTracks);
-                this._mpdCommand('add', [streamUrl], maybeAutoplay);
-            });
-        });
+        this._beginStreamLoad(options);
+        this._installStreamTracks(this.lofiURLs.filter(url => url.trim()).map(url => ({ url, title: url, resolveTitle: true })));
     }
 
     _switchToStream(playlist, options = {}) {
@@ -473,109 +473,191 @@ class Player {
         this._loadStream(this.currentUrl ? { name: this.currentUrl, url: this.currentUrl } : null, options);
     }
 
-    _loadStream(source, options = {}) {
+    _configureMpdQueue(streaming) {
+        this._mpdCommand('random', [!streaming && this._random ? '1' : '0']);
+        this._mpdCommand('repeat', [streaming ? '0' : '1']);
+        this._mpdCommand('single', ['0']);
+        // MPD transitions directly to the prepared successor and discards the
+        // finished entry, keeping its queue bounded to current + next.
+        this._mpdCommand('consume', [streaming ? '1' : '0']);
+    }
+
+    _beginStreamLoad(options) {
         const gen = this._cancelStreamResolution();
         this._streamAutoplay = !!options.autoplay;
-        this._pendingStreamTrack = options.selectedTrack || null;
-        this._resetStreamExpiry();
+        this._startFailures = 0;
         this.streamTracks = [];
-        this._streamUrlToTitle = {};
         this.urlError = '';
         this._currentTitle = '';
+        this._configureMpdQueue(true);
+        this._mpdCommand('clear');
         this.emitter.emit('title-changed', '');
         this.emitter.emit('stream-tracks-changed', this.streamTracks);
         this.emitter.emit('state-changed', this.getState());
-        this._mpdCommand('clear');
+        return gen;
+    }
+
+    _loadStream(source, options = {}) {
+        const gen = this._beginStreamLoad(options);
         if (!source) return;
         if (this.mode === 'url' && !new URL(source.url).searchParams.get('list')) {
-            const track = { url: source.url, title: source.url, resolveTitle: true };
-            this._streamTrackJobs = [track];
-            if (this._pendingStreamTrack?.url === track.url) this._pendingStreamTrack = track;
-            this.streamTracks = [track.title];
-            this.emitter.emit('stream-tracks-changed', this.streamTracks);
-            this._queueStreamTrack(track, gen);
+            this._installStreamTracks([{ url: source.url, title: source.url, resolveTitle: true }]);
             return;
         }
+        this._streamListLoading = true;
         this._streamResolver.exec(['--flat-playlist', '--yes-playlist', '--print', 'url', '--print', 'title', source.url], (err, stdout) => {
             if (gen !== this._streamGen) return;
+            this._streamListLoading = false;
             if (err) {
-                console.log('stream playlist error:', source.name);
-                // Resolution failed, so the (now-cleared) queue has no fresh URLs;
-                // mark stale so the next play attempt retries instead of giving up.
-                this._streamUrlsExpireAt = 0;
-                this._reportUrlError();
+                if (err.code === 'YOUTUBE_BLOCKED') this._scheduleStreamRetry();
+                else this._reportUrlError();
                 return;
             }
             const lines = stdout.trim().split(/\r?\n/);
             const tracks = [];
-            for (let i = 0; i + 1 < lines.length; i += 2) {
-                tracks.push({ url: lines[i], title: lines[i + 1] });
-            }
-            console.log(source.name + ': loading', tracks.length, 'tracks');
-            if (tracks.length === 0) {
-                this._streamUrlsExpireAt = 0;
-                this._reportUrlError();
-                return;
-            }
-            this._streamTrackJobs = tracks;
-            if (this._pendingStreamTrack) {
-                const selectedUrl = this._pendingStreamTrack.url;
-                this._pendingStreamTrack = tracks.find(track => track.url === selectedUrl) || null;
-            }
-            this.streamTracks = tracks.map(t => t.title);
-            this.emitter.emit('stream-tracks-changed', this.streamTracks);
-            tracks.forEach(track => this._queueStreamTrack(track, gen));
-        });
+            for (let i = 0; i + 1 < lines.length; i += 2) tracks.push({ url: lines[i], title: lines[i + 1] });
+            console.log(source.name + ': listed', tracks.length, 'tracks');
+            this._installStreamTracks(tracks);
+        }, 2);
     }
 
-    _queueStreamTrack(track, gen) {
+    _installStreamTracks(tracks) {
+        this._streamTrackJobs = tracks;
+        this._emitStreamTracks();
+        if (!tracks.length) { this._reportUrlError(); return; }
+        if (this._streamAutoplay) this.start();
+    }
+
+    _emitStreamTracks() {
+        this.streamTracks = this._streamTrackJobs.map(track => track.failed
+            ? { title: track.title, broken: true } : track.title);
+        this.emitter.emit('stream-tracks-changed', this.streamTracks);
+        this.emitter.emit('state-changed', this.getState());
+    }
+
+    _chooseStreamTrack(current = null) {
+        const tracks = this._streamTrackJobs;
+        const available = tracks.filter(track => !track.failed && track !== current);
+        if (!available.length) return current && !current.failed ? current : null;
+        if (this._random) return available[Math.floor(Math.random() * available.length)];
+        const index = tracks.indexOf(current);
+        for (let step = 1; step <= tracks.length; step++) {
+            const track = tracks[(index + step) % tracks.length];
+            if (!track.failed && track !== current) return track;
+        }
+        return null;
+    }
+
+    _requestStreamTrack(track) {
+        if (this._streamResolver.queue.getError() && !this._trackUrlIsFresh(track)) {
+            this._pendingStreamTrack = track;
+            this._streamAutoplay = true;
+            this._scheduleStreamRetry();
+            return;
+        }
+        if (this._pendingStreamTrack !== track) ++this._playRequest;
+        this._pendingStreamTrack = track;
+        this._streamAutoplay = true;
+        this.urlError = '';
         track.failed = false;
-        const args = track.resolveTitle
-            ? ['--no-playlist', '-f', 'bestaudio/best', '--print', 'title', '-g', track.url]
-            : ['-g', track.url];
-        const failed = () => {
-            track.failed = true;
-            track.streamUrl = null;
-            if (this._streamTrackJobs.every(t => t.failed)) {
-                this._streamUrlsExpireAt = 0;
-                this._reportUrlError();
+        // Keep the current audio playing until the chosen track is ready.
+        for (const other of this._streamTrackJobs) {
+            if (other !== track && other.job) {
+                this._streamResolver.cancel(other.job);
+                other.job = null;
             }
-        };
+        }
+        if (this._trackUrlIsFresh(track)) this._activateStreamTrack(track);
+        else if (!track.job) this._queueStreamTrack(track);
+        this._streamResolver.prioritize(track.job);
+        this.emitter.emit('state-changed', this.getState());
+    }
+
+    _queueStreamTrack(track) {
+        const gen = this._streamGen;
+        track.streamUrl = null;
+        const args = ['--no-playlist', '-f', 'bestaudio/best'];
+        if (track.resolveTitle) args.push('--print', 'title');
+        args.push('-g', track.url);
         track.job = this._streamResolver.exec(args, (err, stdout) => {
             if (gen !== this._streamGen) return;
             track.job = null;
-            if (err) { failed(); return; }
-            const lines = stdout.split(/\r?\n/).filter(line => line.length !== 0);
-            if (lines.length < (track.resolveTitle ? 2 : 1)) { failed(); return; }
-            if (track.resolveTitle) {
-                track.title = lines[0];
-                this.streamTracks = this._streamTrackJobs.map(t => t.title);
-                this.emitter.emit('stream-tracks-changed', this.streamTracks);
-            }
-            track.streamUrl = lines[lines.length - 1];
-            this._rememberStreamUrl(track.streamUrl, track.title);
-            this._mpdCommand('add', [track.streamUrl], err => {
-                if (gen !== this._streamGen) return;
-                if (err) { failed(); return; }
-                const hadReadyTrack = this._streamTrackJobs.some(t => t.ready);
-                track.ready = true;
-                if (this.mode === 'url' && !hadReadyTrack) {
-                    this.emitter.emit('state-changed', this.getState());
-                }
+            const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+            if (err || lines.length < (track.resolveTitle ? 2 : 1)) {
+                if (err?.code === 'YOUTUBE_BLOCKED') { this._scheduleStreamRetry(); return; }
+                track.failed = true;
                 if (this._pendingStreamTrack === track) {
-                    this._playStreamUrl(track.streamUrl, gen, track);
-                } else if (this._streamAutoplay && !this._pendingStreamTrack) {
-                    this._streamAutoplay = false;
-                    this._mpdCommand('play');
+                    this._pendingStreamTrack = null;
+                    const next = this._chooseStreamTrack(track);
+                    if (next && ++this._startFailures < 3) this._requestStreamTrack(next);
+                    else { this._streamAutoplay = false; this._reportUrlError(); }
+                } else if (this._nextStreamTrack === track) {
+                    this._nextStreamTrack = null;
+                    if (++this._prefetchFailures < 3) this._prepareNextStreamTrack();
                 }
+                this._emitStreamTracks();
+                return;
+            }
+            if (track.resolveTitle) track.title = lines[0];
+            track.streamUrl = lines.at(-1);
+            track.expiresAt = directUrlExpiry(track.streamUrl) || Date.now() + STREAM_URL_FALLBACK_TTL_MS;
+            track.failed = false;
+            this._streamUrlToTitle[track.streamUrl] = track.title;
+            this._emitStreamTracks();
+            if (this._pendingStreamTrack === track) this._activateStreamTrack(track);
+            else if (this._nextStreamTrack === track) this._addPreparedTrack(track);
+        }, this._pendingStreamTrack === track ? 2 : 0);
+    }
+
+    _activateStreamTrack(track) {
+        const gen = this._streamGen;
+        const request = ++this._playRequest;
+        this._streamPlaying = false;
+        this._nextStreamTrack = null;
+        for (const entry of this._streamTrackJobs) entry.queued = false;
+        this._mpdCommand('clear');
+        this._mpdCommand('add', [track.streamUrl], err => {
+            if (gen !== this._streamGen || request !== this._playRequest || this._pendingStreamTrack !== track) return;
+            if (err) { this._pendingStreamTrack = null; this._streamAutoplay = false; this._reportUrlError(); return; }
+            track.queued = true;
+            this._activeStreamTrack = track;
+            this._prefetchFailures = 0;
+            this._startFailures = 0;
+            this._mpdCommand('play', [], err => {
+                if (gen !== this._streamGen || request !== this._playRequest) return;
+                if (err) { this._streamPlaying = false; this._reportUrlError(); return; }
+                this._pendingStreamTrack = null;
+                this._streamAutoplay = false;
+                this._streamPlaying = true;
+                this._prepareNextStreamTrack();
             });
         });
-        if (this._pendingStreamTrack === track) this._streamResolver.prioritize(track.job);
+    }
+
+    _prepareNextStreamTrack() {
+        if (!this._streamPlaying || this._pendingStreamTrack) return;
+        if (!this._nextStreamTrack) this._nextStreamTrack = this._chooseStreamTrack(this._activeStreamTrack);
+        const track = this._nextStreamTrack;
+        if (!track || track === this._activeStreamTrack) return;
+        if (this._trackUrlIsFresh(track)) this._addPreparedTrack(track);
+        else if (this._streamResolver.queue.getError()) this._scheduleStreamRetry();
+        else if (!track.job) this._queueStreamTrack(track);
+    }
+
+    _addPreparedTrack(track) {
+        if (track.queued || !this._streamPlaying || this._pendingStreamTrack || this._nextStreamTrack !== track) return;
+        track.queued = true;
+        const gen = this._streamGen;
+        this._mpdCommand('add', [track.streamUrl], err => {
+            if (gen !== this._streamGen) return;
+            if (err) track.queued = false;
+        });
     }
 
     _reportUrlError() {
-        if (this.mode !== 'url') return;
         this.urlError = 'Unable to play this URL. Check that the live stream or playlist is available and try again.';
+        this._streamAutoplay = false;
+        console.log('Unable to prepare stream playback');
         this.emitter.emit('state-changed', this.getState());
     }
 
@@ -612,47 +694,13 @@ class Player {
     }
 
     playStreamTrack(selection) {
-        if (this.mode === 'stream' || this.mode === 'url') {
-            // The GUI sends the playlist index because titles can be identical.
-            // Keep title selection available to command-socket clients.
-            const track = Number.isInteger(selection)
-                ? this._streamTrackJobs[selection]
-                : this._streamTrackJobs.find(track => track.title === selection);
-            if (!track) return;
-            if (this._streamUrlsNeedRefresh()) {
-                this._refreshStreamUrls(false, track);
-                return;
-            }
-            this._pendingStreamTrack = track;
-            this._streamAutoplay = false;
-            // MPD must not continue or advance through other ready tracks while
-            // the selected track is still being resolved or added to its queue.
-            if (!track.ready) this._mpdCommand('stop');
-            if (!track.streamUrl && !track.job) this._queueStreamTrack(track, this._streamGen);
-            this._streamResolver.prioritize(track.job);
-            if (track.ready) this._playStreamUrl(track.streamUrl, this._streamGen, track);
-            return;
-        }
-        if (this._ensureFreshUrls()) return;
-        const selected = Number.isInteger(selection) ? this.streamTracks[selection] : selection;
-        const title = typeof selected === 'string' ? selected : selected?.title;
-        const url = Object.keys(this._streamUrlToTitle).find(
-            k => this._streamUrlToTitle[k] === title
-        );
-        if (!url) return;
-        this._playStreamUrl(url, this._streamGen);
-    }
-
-    _playStreamUrl(url, gen, track = null) {
-        this._mpdCommand('playlistfind', ['file', url], (err, msg) => {
-            if (err || gen !== this._streamGen || (track && this._pendingStreamTrack !== track)) return;
-            const found = msg.match(/^Pos: (\d+)$/im);
-            if (found && found.length >= 2) {
-                this._mpdCommand('play', [found[1]]);
-                if (track) this._pendingStreamTrack = null;
-                this._streamAutoplay = false;
-            }
-        });
+        if (!this._isStreaming()) return;
+        const track = Number.isInteger(selection)
+            ? this._streamTrackJobs[selection]
+            : this._streamTrackJobs.find(track => track.title === selection);
+        if (!track) return;
+        this._startFailures = 0;
+        this._requestStreamTrack(track);
     }
 
     _savePlaylists() {
@@ -671,7 +719,7 @@ class Player {
             currentPlaylist: this.currentPlaylist,
             currentUrl: this.currentUrl,
             urlError: this.urlError,
-            urlLoading: this.mode === 'url' && !!this.currentUrl && !this.urlError && !this._streamTrackJobs.some(track => track.ready),
+            urlLoading: this.mode === 'url' && !!this.currentUrl && !this.urlError && !!(this._streamAutoplay || this._pendingStreamTrack || this._streamListLoading),
             streamTracks: this.streamTracks,
             random: this._random
         };
