@@ -53,11 +53,11 @@ test('playback and downloads share spacing and queued playback gets priority', t
 });
 
 for (const error of ['HTTP Error 429: Too Many Requests', 'Sign in to confirm you’re not a bot', 'This session has been rate-limited by YouTube', 'YouTube is requiring a captcha challenge before playback']) {
-    test(`${error} pauses every owner and makes no automatic request during cooldown`, async t => {
+    test(`${error} pauses owners of the same request category during cooldown`, async t => {
         t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000 });
         const { queue, calls, foreground, downloads } = setup(t, { interval: 0, cooldown: 3600000 });
         const failures = [];
-        downloads.exec(['-g', 'download'], err => failures.push(err?.code), -1);
+        downloads.exec(['-g', 'download'], err => failures.push(err?.code), 0);
         foreground.exec(['-g', 'selected'], err => failures.push(err?.code), 2);
         calls[0].finish(new Error('failed'), '', error);
         assert.deepEqual(failures, ['YOUTUBE_BLOCKED', 'YOUTUBE_BLOCKED']);

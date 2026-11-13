@@ -98,7 +98,7 @@ class Downloader {
     }
 
     _drain() {
-        if (this.resolver.queue.getError()) {
+        if (this.resolver.queue.getError(false, true)) {
             for (const { video, callback } of this.pending.splice(0)) {
                 this.ids.delete(video.id);
                 callback(video.id, video.snippet.title, false);

@@ -66,6 +66,7 @@ class Player {
             }
             this.emitter.emit('state-changed', this.getState());
         });
+        this._streamResolver.queue.on('download-blocked', () => this._saveSession());
         try {
             this.lofiURLs = fs.readFileSync(lofiURLFile, 'utf-8').split('\n');
         } catch {
@@ -175,6 +176,7 @@ class Player {
             tracks: this._streamTrackJobs.map(({ url, title, resolveTitle }) => ({ url, title, resolveTitle })),
             blockedUntil: queue.blockedUntil,
             metadataBlockedUntil: queue.metadataBlockedUntil,
+            downloadBlockedUntil: queue.downloadBlockedUntil,
         });
         if (session === this._savedSession) return;
         try {
@@ -201,13 +203,16 @@ class Player {
         this.currentUrl = session.currentUrl;
         this._random = session.random !== false;
         const queue = this._streamResolver.queue;
-        if (Number.isFinite(session.blockedUntil) && session.blockedUntil > Date.now()) {
-            queue.blockedUntil = session.blockedUntil;
-            queue.blockError = Object.assign(new Error('YouTube requests paused for one hour after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
-        }
-        if (Number.isFinite(session.metadataBlockedUntil) && session.metadataBlockedUntil > Date.now()) {
-            queue.metadataBlockedUntil = session.metadataBlockedUntil;
-            queue.metadataBlockError = Object.assign(new Error('YouTube playlist requests paused for one hour after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
+        for (const [until, error, category] of [
+            ['blockedUntil', 'blockError', ''],
+            ['metadataBlockedUntil', 'metadataBlockError', 'playlist '],
+            ['downloadBlockedUntil', 'downloadBlockError', 'download '],
+        ]) {
+            if (Number.isFinite(session[until]) && session[until] > Date.now()) {
+                // Old sessions can contain the former one-hour cooldown.
+                queue[until] = Math.min(session[until], Date.now() + queue.cooldown);
+                queue[error] = Object.assign(new Error('YouTube ' + category + 'requests paused briefly after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
+            }
         }
         if (!session.tracks.length) {
             // A controller may have exited while listing a playlist or while

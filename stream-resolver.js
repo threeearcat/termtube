@@ -6,7 +6,7 @@ const { EventEmitter } = require('events');
 // Separate yt-dlp processes do not share --sleep-requests timers. Use one
 // paced queue for playback, playlist enumeration, and likes downloads.
 class YoutubeQueue extends EventEmitter {
-    constructor(run = execFile, { interval = 10000, cooldown = 60 * 60 * 1000 } = {}) {
+    constructor(run = execFile, { interval = 10000, cooldown = 30000 } = {}) {
         super();
         this.run = run;
         this.interval = interval;
@@ -18,17 +18,21 @@ class YoutubeQueue extends EventEmitter {
         this.blockError = null;
         this.metadataBlockedUntil = 0;
         this.metadataBlockError = null;
+        this.downloadBlockedUntil = 0;
+        this.downloadBlockError = null;
         this.timer = null;
     }
 
-    getError(metadata = false) {
-        const until = metadata ? this.metadataBlockedUntil : this.blockedUntil;
-        return Date.now() < until ? (metadata ? this.metadataBlockError : this.blockError) : null;
+    getError(metadata = false, download = false) {
+        const until = metadata ? this.metadataBlockedUntil : download ? this.downloadBlockedUntil : this.blockedUntil;
+        const error = metadata ? this.metadataBlockError : download ? this.downloadBlockError : this.blockError;
+        return Date.now() < until ? error : null;
     }
 
     exec(owner, args, callback, priority) {
         const job = { owner, args, callback, priority, cancelled: false, metadata: args.includes('--flat-playlist') };
-        const blocked = this.getError(job.metadata);
+        job.download = !job.metadata && priority < 0;
+        const blocked = this.getError(job.metadata, job.download);
         if (blocked) {
             queueMicrotask(() => { if (!job.cancelled) callback(blocked, '', ''); });
         } else {
@@ -73,22 +77,27 @@ class YoutubeQueue extends EventEmitter {
             clearTimeout(job.killTimer);
             this.active = null;
             this.nextAt = Date.now() + this.interval;
-            // Share pacing, but a video extraction failure must not block
-            // flat playlist metadata, which does not extract individual videos.
+            // Share pacing, but isolate cooldowns for playback, background
+            // downloads, and flat metadata so a likes failure cannot disable
+            // otherwise working playlist browsing or playback.
             if (err && /(?:HTTP(?: Error| status)?[ :]*429|Too Many Requests|Sign in to confirm.*bot|rate.limit(?:ed|ing)|captcha challenge)/i.test(stderr + '\n' + err.message)) {
-                err = Object.assign(new Error('YouTube ' + (job.metadata ? 'playlist ' : '') + 'requests paused for one hour after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
+                err = Object.assign(new Error('YouTube ' + (job.metadata ? 'playlist ' : job.download ? 'download ' : '') + 'requests paused for ' + Math.ceil(this.cooldown / 1000) + ' seconds after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
                 if (job.metadata) {
                     this.metadataBlockError = err;
                     this.metadataBlockedUntil = Date.now() + this.cooldown;
+                } else if (job.download) {
+                    this.downloadBlockError = err;
+                    this.downloadBlockedUntil = Date.now() + this.cooldown;
                 } else {
                     this.blockError = err;
                     this.blockedUntil = Date.now() + this.cooldown;
                 }
-                const pending = this.pending.filter(queued => queued.metadata === job.metadata);
-                this.pending = this.pending.filter(queued => queued.metadata !== job.metadata);
+                const sameCategory = queued => queued.metadata === job.metadata && queued.download === job.download;
+                const pending = this.pending.filter(sameCategory);
+                this.pending = this.pending.filter(queued => !sameCategory(queued));
                 clearTimeout(this.timer);
                 this.timer = null;
-                this.emit(job.metadata ? 'metadata-blocked' : 'blocked', err);
+                this.emit(job.metadata ? 'metadata-blocked' : job.download ? 'download-blocked' : 'blocked', err);
                 for (const queued of pending) {
                     if (!queued.cancelled) queued.callback(err, '', '');
                 }

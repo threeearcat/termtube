@@ -577,6 +577,32 @@ test('a controller restart preserves the YouTube cooldown instead of issuing mor
     assert.equal(restored.calls.length, 1);
 });
 
+test('restoring an old one-hour pause caps it at the current 30-second cooldown', t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000000 });
+    const original = setup(t);
+    original.scheduler.blockedUntil = Date.now() + 3600000;
+    original.player.selectPlaylist('rock'); original.list();
+    const restored = setup(t);
+    restored.scheduler.cooldown = 30000;
+    fs.copyFileSync(original.player.sessionPath, restored.player.sessionPath);
+    restored.player.mpd.emit('ready');
+    assert.equal(restored.scheduler.blockedUntil, Date.now() + 30000);
+});
+
+test('a saved download cooldown does not block a selected track after restart', t => {
+    const original = setup(t);
+    original.scheduler.downloadBlockedUntil = Date.now() + 3600000;
+    original.player.selectPlaylist('rock'); original.list();
+    const restored = setup(t);
+    fs.copyFileSync(original.player.sessionPath, restored.player.sessionPath);
+    restored.player.mpd.emit('ready');
+    assert.ok(restored.scheduler.getError(false, true));
+    assert.equal(restored.scheduler.getError(), null);
+    restored.player.playStreamTrack(301);
+    assert.equal(restored.calls.length, 1);
+    assert.equal(restored.calls[0].args.at(-1), 'https://example.com/track/301');
+});
+
 test('MPD reconnection preserves stream mode and recovers an exhausted queue', t => {
     const { player, list, resolve, end, commands, queue, calls } = setup(t, { count: 2 });
     player.mpd.emit('ready');

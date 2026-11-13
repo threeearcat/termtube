@@ -55,6 +55,24 @@ test('a YouTube block stops the likes backlog and later sync attempts without ne
     assert.equal(results.length, 4);
 });
 
+test('a failed likes lookup pauses only downloads while selected playback still resolves', t => {
+    const { calls, add, results, queue } = setup(t);
+    add('first'); add('second');
+    const player = new StreamResolver(queue);
+    let resolved = false;
+    player.exec(['-g', 'selected-track'], err => { assert.equal(err, null); resolved = true; }, 2);
+    calls[0].finish(new Error('Sign in to confirm you are not a bot'));
+    assert.equal(results.length, 2, 'stop the download backlog');
+    assert.equal(queue.getError(), null, 'playback is not paused');
+    assert.ok(queue.getError(false, true), 'downloads keep their own cooldown');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].args.at(-1), 'selected-track');
+    calls[1].finish(null, 'https://example.com/audio/selected\n');
+    assert.equal(resolved, true);
+    add('third');
+    assert.equal(calls.length, 2, 'later downloads still respect their cooldown');
+});
+
 test('a selected stream can resolve during a likes transfer using the same queue', async t => {
     const { calls, transfers, add, queue } = setup(t);
     add('first'); add('second');
