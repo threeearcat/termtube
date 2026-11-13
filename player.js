@@ -42,6 +42,7 @@ class Player {
         this._streamResolver = resolver;
         this._streamTrackJobs = [];
         this._pendingStreamTrack = null;
+        this._manualStreamSelection = false;
         this._streamAutoplay = false;
         this._random = true;
         this._activeStreamTrack = null;
@@ -59,8 +60,9 @@ class Player {
         this.emitter = new EventEmitter();
         this._streamResolver.queue.on('blocked', error => {
             console.log(error.message);
+            this.urlError = error.message;
             this._scheduleStreamRetry();
-            this._saveSession();
+            this.emitter.emit('state-changed', this.getState());
         });
         try {
             this.lofiURLs = fs.readFileSync(lofiURLFile, 'utf-8').split('\n');
@@ -167,6 +169,7 @@ class Player {
             random: this._random,
             resume: !!(this._streamPlaying || this._pendingStreamTrack || this._streamAutoplay),
             selected: this._streamTrackJobs.indexOf(this._pendingStreamTrack || this._activeStreamTrack),
+            manualSelection: this._manualStreamSelection,
             tracks: this._streamTrackJobs.map(({ url, title, resolveTitle }) => ({ url, title, resolveTitle })),
             blockedUntil: queue.blockedUntil,
         });
@@ -208,7 +211,7 @@ class Player {
         this._streamAutoplay = !!session.resume;
         this._emitStreamTracks();
         if (session.resume) {
-            if (selected) this._requestStreamTrack(selected);
+            if (selected) this._requestStreamTrack(selected, !!session.manualSelection);
             else this.start();
         } else {
             this._mpdCommand('stop');
@@ -224,6 +227,7 @@ class Player {
         this._streamResolver.cancel();
         this._streamTrackJobs = [];
         this._pendingStreamTrack = null;
+        this._manualStreamSelection = false;
         this._activeStreamTrack = null;
         this._nextStreamTrack = null;
         this._streamAutoplay = false;
@@ -323,7 +327,13 @@ class Player {
                     // Fresh URLs that fail must not cause an unbounded retry loop.
                     this._streamPlaying = false;
                     this._streamAutoplay = false;
-                    this._reportUrlError();
+                    // MPD may already have skipped to a queued song after a
+                    // decoder error. Stop it instead of playing a substitute.
+                    this._mpdCommand('stop');
+                    const status = msg.match(/HTTP(?: status)? (\d{3})/i)?.[1];
+                    this._reportUrlError(track
+                        ? 'Unable to play "' + track.title + '"' + (status ? ' (HTTP ' + status + ')' : '') + '.'
+                        : undefined);
                 }
                 return;
             }
@@ -385,6 +395,7 @@ class Player {
         clearTimeout(this._retryTimer);
         this._retryTimer = null;
         this._pendingStreamTrack = null;
+        this._manualStreamSelection = false;
         this._streamAutoplay = false;
         this._streamPlaying = false;
         this._nextStreamTrack = null;
@@ -575,6 +586,7 @@ class Player {
             return;
         }
         this._streamListLoading = true;
+        this.emitter.emit('state-changed', this.getState());
         this._streamResolver.exec(['--flat-playlist', '--yes-playlist', '--print', 'url', '--print', 'title', source.url], (err, stdout) => {
             if (gen !== this._streamGen) return;
             this._streamListLoading = false;
@@ -618,19 +630,16 @@ class Player {
         return null;
     }
 
-    _requestStreamTrack(track) {
-        if (this._streamResolver.queue.getError() && !this._trackUrlIsFresh(track)) {
-            this._pendingStreamTrack = track;
-            this._streamAutoplay = true;
-            this._scheduleStreamRetry();
-            return;
-        }
+    _requestStreamTrack(track, manual = this._pendingStreamTrack === track && this._manualStreamSelection) {
         if (this._pendingStreamTrack !== track) ++this._playRequest;
         this._pendingStreamTrack = track;
+        this._manualStreamSelection = manual;
         this._streamAutoplay = true;
         this.urlError = '';
         track.failed = false;
-        // Keep the current audio playing until the chosen track is ready.
+        // Keep the current audio, but prevent MPD from advancing to an already
+        // prepared successor while the requested track is still loading.
+        this._mpdCommand('single', ['1']);
         for (const other of this._streamTrackJobs) {
             if (other !== track && other.job) {
                 this._streamResolver.cancel(other.job);
@@ -638,7 +647,10 @@ class Player {
             }
         }
         if (this._trackUrlIsFresh(track)) this._activateStreamTrack(track);
-        else if (!track.job) this._queueStreamTrack(track);
+        else if (this._streamResolver.queue.getError()) {
+            this.urlError = this._streamResolver.queue.getError().message;
+            this._scheduleStreamRetry();
+        } else if (!track.job) this._queueStreamTrack(track);
         this._streamResolver.prioritize(track.job);
         this.emitter.emit('state-changed', this.getState());
     }
@@ -658,9 +670,14 @@ class Player {
                 track.failed = true;
                 if (this._pendingStreamTrack === track) {
                     this._pendingStreamTrack = null;
-                    const next = this._chooseStreamTrack(track);
-                    if (next && ++this._startFailures < 3) this._requestStreamTrack(next);
-                    else { this._streamAutoplay = false; this._reportUrlError(); }
+                    if (this._manualStreamSelection) {
+                        this._streamPlaying = false;
+                        this._reportUrlError('Unable to play "' + track.title + '". Please try another track.');
+                    } else {
+                        const next = this._chooseStreamTrack(track);
+                        if (next && ++this._startFailures < 3) this._requestStreamTrack(next);
+                        else { this._streamAutoplay = false; this._reportUrlError(); }
+                    }
                 } else if (this._nextStreamTrack === track) {
                     this._nextStreamTrack = null;
                     if (++this._prefetchFailures < 3) this._prepareNextStreamTrack();
@@ -693,13 +710,15 @@ class Player {
             this._activeStreamTrack = track;
             this._prefetchFailures = 0;
             this._startFailures = 0;
+            this._mpdCommand('single', ['0']);
             this._mpdCommand('play', [], err => {
                 if (gen !== this._streamGen || request !== this._playRequest) return;
                 if (err) { this._streamPlaying = false; this._reportUrlError(); return; }
                 this._pendingStreamTrack = null;
+                this._manualStreamSelection = false;
                 this._streamAutoplay = false;
                 this._streamPlaying = true;
-                this._saveSession();
+                this.emitter.emit('state-changed', this.getState());
                 this._prepareNextStreamTrack();
             });
         });
@@ -725,10 +744,10 @@ class Player {
         });
     }
 
-    _reportUrlError() {
-        this.urlError = 'Unable to play this URL. Check that the live stream or playlist is available and try again.';
+    _reportUrlError(message = 'Unable to play this URL. Check that the live stream or playlist is available and try again.') {
+        this.urlError = message;
         this._streamAutoplay = false;
-        console.log('Unable to prepare stream playback');
+        console.log('Unable to prepare stream playback:', message);
         this.emitter.emit('state-changed', this.getState());
     }
 
@@ -771,7 +790,7 @@ class Player {
             : this._streamTrackJobs.find(track => track.title === selection);
         if (!track) return;
         this._startFailures = 0;
-        this._requestStreamTrack(track);
+        this._requestStreamTrack(track, true);
     }
 
     _savePlaylists() {
@@ -791,6 +810,8 @@ class Player {
             currentUrl: this.currentUrl,
             urlError: this.urlError,
             urlLoading: this.mode === 'url' && !!this.currentUrl && !this.urlError && !!(this._streamAutoplay || this._pendingStreamTrack || this._streamListLoading),
+            streamLoading: this._isStreaming() && !this.urlError && !!(this._streamAutoplay || this._pendingStreamTrack || this._streamListLoading),
+            pendingStreamTitle: this._pendingStreamTrack?.title || '',
             streamTracks: this.streamTracks,
             random: this._random
         };

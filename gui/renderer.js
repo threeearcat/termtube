@@ -161,7 +161,10 @@ function updateState(state) {
         cachedCurrentUrl = state.currentUrl;
         urlInput.value = cachedCurrentUrl;
     }
-    urlFeedback.textContent = state.urlError || (state.urlLoading ? 'Loading…' : '');
+    const loading = state.streamLoading || state.urlLoading;
+    urlFeedback.textContent = ['stream', 'lofi', 'url'].includes(state.mode)
+        ? state.urlError || (loading ? (state.pendingStreamTitle ? 'Loading: ' + state.pendingStreamTitle : 'Loading…') : '')
+        : '';
     urlFeedback.classList.toggle('error', !!state.urlError);
     if (enteringUrlMode) urlInput.focus();
 

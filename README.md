@@ -22,7 +22,10 @@ Playback prepares only the current song and one successor. MPD transitions to
 the prepared successor directly and consumes finished queue entries. Random
 playback still chooses from the full playlist. Selecting another song keeps the
 current audio playing until the selected song is ready; cached URLs are reused
-until they need refreshing. Lofi uses the same on-demand loading.
+until they need refreshing. While a selection is loading, MPD cannot advance to
+the old prepared successor. A failed manual selection reports an error instead
+of playing a different track. Loading, failures, and YouTube cooldowns are shown
+in all streaming modes. Lofi uses the same on-demand loading.
 
 Playback lookups and likes downloads share one yt-dlp process slot, with ten
 seconds between processes and one second between extraction requests. Playback

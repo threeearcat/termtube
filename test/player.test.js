@@ -37,6 +37,7 @@ function setup(t, { count = 302, hold = new Set() } = {}) {
     const commands = [];
     const queue = [];
     let playing = false;
+    let single = false;
     t.mock.method(player, '_printTitle', title => { player._currentTitle = title; });
     t.mock.method(player, '_mpdCommand', (name, args = [], callback = () => {}) => {
         const command = { name, args, callback };
@@ -46,6 +47,7 @@ function setup(t, { count = 302, hold = new Set() } = {}) {
         if (name === 'add') queue.push(args[0]);
         if (name === 'play') playing = true;
         if (name === 'stop') playing = false;
+        if (name === 'single') single = args[0] === '1';
         if (name === 'status') callback(null, `state: ${playing ? 'play' : 'stop'}\n`);
         else if (name === 'currentsong') callback(null, queue.length ? `file: ${queue[0]}\n` : '');
         else callback(null, '');
@@ -62,7 +64,7 @@ function setup(t, { count = 302, hold = new Set() } = {}) {
     function resolve(id, child = calls.at(-1)) { child.finish(null, `https://example.com/audio/${id}\n`); }
     function end() {
         queue.shift();
-        playing = queue.length > 0;
+        playing = queue.length > 0 && !single;
         player._updateMpdState();
     }
     return { player, calls, commands, scheduler, queue, list, resolve, end, hold };
@@ -142,6 +144,64 @@ test('preparing a newly selected track keeps the current audio playing', t => {
     assert.equal(calls.at(-1).args.at(-1), 'https://example.com/track/301');
     resolve(301);
     assert.equal(queue[0], 'https://example.com/audio/301');
+});
+
+test('a prepared successor cannot play while a distant selection is loading', t => {
+    const { player, list, resolve, queue, end, commands } = setup(t);
+    const states = [];
+    player.emitter.on('state-changed', state => states.push(state));
+    player.selectPlaylist('rock'); list(); player.start(); resolve(0); resolve(1);
+    player.playStreamTrack(301);
+    assert.deepEqual(queue, ['https://example.com/audio/0', 'https://example.com/audio/1']);
+    end();
+    assert.equal(player._mpdState, 'stop', 'wait for the selection instead of playing track 1');
+    assert.equal(player._pendingStreamTrack.title, 'Track 301');
+    assert.equal(player.getState().streamLoading, true);
+    assert.equal(player.getState().pendingStreamTitle, 'Track 301');
+    resolve(301);
+    assert.deepEqual(queue, ['https://example.com/audio/301', 'https://example.com/audio/0']);
+    assert.equal(player.getState().streamLoading, false);
+    assert.equal(states.at(-1).streamLoading, false, 'notify the UI as soon as the selection starts');
+    const plays = commands.filter(c => c.name === 'play').length;
+    end();
+    assert.equal(player._currentTitle, 'Track 0', 'normal automatic transitions resume after selection');
+    assert.equal(commands.filter(c => c.name === 'play').length, plays);
+});
+
+test('a failed manual selection reports the failure without substituting another track', t => {
+    const { player, calls, list, resolve, queue, end, commands } = setup(t);
+    player.selectPlaylist('rock'); list(); player.start(); resolve(0); resolve(1);
+    player.playStreamTrack(301);
+    const count = calls.length;
+    const plays = commands.filter(c => c.name === 'play').length;
+    calls.at(-1).finish(new Error('unavailable'));
+    assert.equal(calls.length, count, 'manual selection must not resolve a substitute');
+    assert.equal(commands.filter(c => c.name === 'play').length, plays, 'manual selection must not play a cached substitute');
+    assert.deepEqual(queue, ['https://example.com/audio/0', 'https://example.com/audio/1']);
+    assert.equal(player.getState().streamLoading, false);
+    assert.match(player.getState().urlError, /Track 301/);
+    end();
+    assert.equal(player._mpdState, 'stop');
+    assert.equal(calls.length, count);
+    assert.equal(commands.filter(c => c.name === 'play').length, plays);
+});
+
+test('selecting during cooldown blocks the prepared successor and preserves manual intent on retry', t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000000 });
+    const { player, scheduler, calls, list, resolve, end } = setup(t);
+    player.selectPlaylist('rock'); list(); player.start(); resolve(0); resolve(1);
+    scheduler.blockedUntil = Date.now() + 3600000;
+    scheduler.blockError = Object.assign(new Error('YouTube requests paused.'), { code: 'YOUTUBE_BLOCKED' });
+    player.playStreamTrack(301);
+    const count = calls.length;
+    end();
+    assert.equal(player._mpdState, 'stop');
+    assert.match(player.getState().urlError, /paused/);
+    t.mock.timers.tick(3600000);
+    assert.equal(calls.length, count + 1);
+    assert.equal(calls.at(-1).args.at(-1), 'https://example.com/track/301');
+    calls.at(-1).finish(new Error('unavailable'));
+    assert.equal(calls.length, count + 1, 'cooldown retry must not substitute a different selection');
 });
 
 test('rapid selections cancel obsolete lookups and never create concurrent extractors', t => {
@@ -273,6 +333,18 @@ test('MPD failures refresh stale URLs once but do not loop on a fresh failing UR
     player._updateMpdState(); commands.at(-1).callback(null, 'state: stop\nerror: HTTP 403\n');
     assert.equal(calls.length, before);
     assert.equal(player._streamPlaying, false);
+});
+
+test('an MPD HTTP 403 stops a skipped successor and reports the selected track', t => {
+    const { player, list, resolve, commands, hold } = setup(t);
+    player.selectPlaylist('rock'); list(); player.playStreamTrack(301); resolve(301); resolve(0);
+    hold.add('status');
+    const before = commands.length;
+    player._updateMpdState();
+    commands.at(-1).callback(null, 'state: play\nerror: CURL failed: The requested URL returned error: 403 (HTTP status 403)\n');
+    assert.equal(commands.slice(before).some(c => c.name === 'stop'), true);
+    assert.equal(player._streamPlaying, false);
+    assert.match(player.getState().urlError, /Track 301.*HTTP 403/);
 });
 
 test('lofi also resolves only the selected stream and a single successor', t => {
@@ -414,6 +486,19 @@ test('stopping playback persists the selection without autoplay on restart', t =
     assert.equal(restored.player._streamAutoplay, false);
     restored.player.start();
     assert.equal(restored.calls.length, 1);
+});
+
+test('a restart during manual selection preserves the selection and never substitutes on failure', t => {
+    const original = setup(t);
+    original.player.selectPlaylist('rock'); original.list();
+    original.player.playStreamTrack(301);
+    const restored = setup(t);
+    fs.copyFileSync(original.player.sessionPath, restored.player.sessionPath);
+    restored.player.mpd.emit('ready');
+    assert.equal(restored.calls[0].args.at(-1), 'https://example.com/track/301');
+    restored.calls[0].finish(new Error('unavailable'));
+    assert.equal(restored.calls.length, 1);
+    assert.match(restored.player.getState().urlError, /Track 301/);
 });
 
 test('a controller restart preserves the YouTube cooldown instead of issuing more lookups', t => {

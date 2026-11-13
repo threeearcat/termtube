@@ -461,10 +461,11 @@ body {
     font-size: 12px;
     line-height: 1.4;
     color: #999;
+    flex-shrink: 0;
 }
 
 #url-feedback:not(:empty) {
-    margin-top: 6px;
+    padding: 6px 16px 8px;
 }
 
 #url-feedback.error {
