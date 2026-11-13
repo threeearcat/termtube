@@ -85,6 +85,30 @@ test('cancelled work cannot hide a rate limit from the other owner', t => {
     assert.equal(calls.length, 1);
 });
 
+for (const metadata of [false, true]) {
+    test(`${metadata ? 'playlist' : 'audio'} cooldown does not block the other request category`, async t => {
+        const { queue, foreground, downloads, calls } = setup(t, { interval: 0 });
+        const audioArgs = ['-g', 'audio'];
+        const metadataArgs = ['--flat-playlist', '--print', 'url', 'playlist'];
+        const blockedArgs = metadata ? metadataArgs : audioArgs;
+        const allowedArgs = metadata ? audioArgs : metadataArgs;
+        const failures = [];
+        downloads.exec(blockedArgs, err => failures.push(err?.code));
+        foreground.exec(allowedArgs, err => assert.equal(err, null));
+        calls[0].finish(new Error('Sign in to confirm you are not a bot'));
+        assert.deepEqual(failures, ['YOUTUBE_BLOCKED']);
+        assert.equal(calls.length, 2, 'the other category still gets its queued process');
+        assert.equal(calls[1].args.includes('--flat-playlist'), !metadata);
+        calls[1].finish(null, 'metadata or audio\n');
+        foreground.exec(blockedArgs, err => failures.push(err?.code));
+        await Promise.resolve();
+        assert.deepEqual(failures, ['YOUTUBE_BLOCKED', 'YOUTUBE_BLOCKED']);
+        assert.equal(calls.length, 2);
+        assert.ok(queue.getError(metadata));
+        assert.equal(queue.getError(!metadata), null);
+    });
+}
+
 test('cancelling one owner preserves the other owner and kills stubborn processes', t => {
     t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000 });
     const { foreground, downloads, calls } = setup(t, { interval: 0 });

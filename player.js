@@ -60,8 +60,10 @@ class Player {
         this.emitter = new EventEmitter();
         this._streamResolver.queue.on('blocked', error => {
             console.log(error.message);
-            this.urlError = error.message;
-            this._scheduleStreamRetry();
+            if (!this._streamListLoading) {
+                this.urlError = error.message;
+                this._scheduleStreamRetry();
+            }
             this.emitter.emit('state-changed', this.getState());
         });
         try {
@@ -172,6 +174,7 @@ class Player {
             manualSelection: this._manualStreamSelection,
             tracks: this._streamTrackJobs.map(({ url, title, resolveTitle }) => ({ url, title, resolveTitle })),
             blockedUntil: queue.blockedUntil,
+            metadataBlockedUntil: queue.metadataBlockedUntil,
         });
         if (session === this._savedSession) return;
         try {
@@ -201,6 +204,19 @@ class Player {
         if (Number.isFinite(session.blockedUntil) && session.blockedUntil > Date.now()) {
             queue.blockedUntil = session.blockedUntil;
             queue.blockError = Object.assign(new Error('YouTube requests paused for one hour after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
+        }
+        if (Number.isFinite(session.metadataBlockedUntil) && session.metadataBlockedUntil > Date.now()) {
+            queue.metadataBlockedUntil = session.metadataBlockedUntil;
+            queue.metadataBlockError = Object.assign(new Error('YouTube playlist requests paused for one hour after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
+        }
+        if (!session.tracks.length) {
+            // A controller may have exited while listing a playlist or while
+            // metadata was blocked. Restore the list even without autoplay.
+            const options = { autoplay: !!session.resume };
+            if (this.mode === 'stream') this._switchToStream(undefined, options);
+            else if (this.mode === 'url') this._switchToUrl(options);
+            else this._switchToLofi(options);
+            return true;
         }
         // Keep MPD's existing audio until a fresh URL is ready. Signed audio
         // URLs are deliberately not persisted in the session file.
@@ -241,15 +257,17 @@ class Player {
         return !!track?.streamUrl && Date.now() + STREAM_URL_REFRESH_MARGIN_MS < track.expiresAt;
     }
 
-    _scheduleStreamRetry() {
+    _scheduleStreamRetry(source = null, autoplay = this._streamAutoplay) {
         if (!this._isStreaming() || this._retryTimer) return;
-        if (!this._streamPlaying && !this._pendingStreamTrack && !this._streamAutoplay) return;
+        if (!source && !this._streamPlaying && !this._pendingStreamTrack && !this._streamAutoplay) return;
         const gen = this._streamGen;
-        const wait = Math.max(1, this._streamResolver.queue.blockedUntil - Date.now());
+        const until = source ? this._streamResolver.queue.metadataBlockedUntil : this._streamResolver.queue.blockedUntil;
+        const wait = Math.max(1, until - Date.now());
         this._retryTimer = setTimeout(() => {
             this._retryTimer = null;
             if (gen !== this._streamGen || !this._isStreaming()) return;
-            if (this._pendingStreamTrack) this._requestStreamTrack(this._pendingStreamTrack);
+            if (source) this._loadStream(source, { autoplay });
+            else if (this._pendingStreamTrack) this._requestStreamTrack(this._pendingStreamTrack);
             else if (this._streamPlaying) this._prepareNextStreamTrack();
             else if (this._streamAutoplay) this.start();
         }, wait);
@@ -591,8 +609,9 @@ class Player {
             if (gen !== this._streamGen) return;
             this._streamListLoading = false;
             if (err) {
-                if (err.code === 'YOUTUBE_BLOCKED') this._scheduleStreamRetry();
-                else this._reportUrlError();
+                const autoplay = this._streamAutoplay;
+                this._reportUrlError(err.code === 'YOUTUBE_BLOCKED' ? err.message : 'Unable to load playlist "' + source.name + '". Please try again.');
+                if (err.code === 'YOUTUBE_BLOCKED') this._scheduleStreamRetry(source, autoplay);
                 return;
             }
             const lines = stdout.trim().split(/\r?\n/);
@@ -605,6 +624,7 @@ class Player {
 
     _installStreamTracks(tracks) {
         this._streamTrackJobs = tracks;
+        this.urlError = '';
         this._emitStreamTracks();
         if (!tracks.length) { this._reportUrlError(); return; }
         if (this._streamAutoplay) this.start();

@@ -16,16 +16,19 @@ class YoutubeQueue extends EventEmitter {
         this.nextAt = 0;
         this.blockedUntil = 0;
         this.blockError = null;
+        this.metadataBlockedUntil = 0;
+        this.metadataBlockError = null;
         this.timer = null;
     }
 
-    getError() {
-        return Date.now() < this.blockedUntil ? this.blockError : null;
+    getError(metadata = false) {
+        const until = metadata ? this.metadataBlockedUntil : this.blockedUntil;
+        return Date.now() < until ? (metadata ? this.metadataBlockError : this.blockError) : null;
     }
 
     exec(owner, args, callback, priority) {
-        const job = { owner, args, callback, priority, cancelled: false };
-        const blocked = this.getError();
+        const job = { owner, args, callback, priority, cancelled: false, metadata: args.includes('--flat-playlist') };
+        const blocked = this.getError(job.metadata);
         if (blocked) {
             queueMicrotask(() => { if (!job.cancelled) callback(blocked, '', ''); });
         } else {
@@ -70,14 +73,22 @@ class YoutubeQueue extends EventEmitter {
             clearTimeout(job.killTimer);
             this.active = null;
             this.nextAt = Date.now() + this.interval;
-            // A genuine 429 must stop all owners even if cancellation raced it.
+            // Share pacing, but a video extraction failure must not block
+            // flat playlist metadata, which does not extract individual videos.
             if (err && /(?:HTTP(?: Error| status)?[ :]*429|Too Many Requests|Sign in to confirm.*bot|rate.limit(?:ed|ing)|captcha challenge)/i.test(stderr + '\n' + err.message)) {
-                err = this.blockError = Object.assign(new Error('YouTube requests paused for one hour after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
-                this.blockedUntil = Date.now() + this.cooldown;
-                const pending = this.pending.splice(0);
+                err = Object.assign(new Error('YouTube ' + (job.metadata ? 'playlist ' : '') + 'requests paused for one hour after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
+                if (job.metadata) {
+                    this.metadataBlockError = err;
+                    this.metadataBlockedUntil = Date.now() + this.cooldown;
+                } else {
+                    this.blockError = err;
+                    this.blockedUntil = Date.now() + this.cooldown;
+                }
+                const pending = this.pending.filter(queued => queued.metadata === job.metadata);
+                this.pending = this.pending.filter(queued => queued.metadata !== job.metadata);
                 clearTimeout(this.timer);
                 this.timer = null;
-                this.emit('blocked', err);
+                this.emit(job.metadata ? 'metadata-blocked' : 'blocked', err);
                 for (const queued of pending) {
                     if (!queued.cancelled) queued.callback(err, '', '');
                 }

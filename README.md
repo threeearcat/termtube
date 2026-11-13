@@ -30,9 +30,12 @@ in all streaming modes. Lofi uses the same on-demand loading.
 Playback lookups and likes downloads share one yt-dlp process slot, with ten
 seconds between processes and one second between extraction requests. Playback
 takes priority over background downloads. Likes downloads run one at a time and
-deduplicate pending videos. A YouTube rate limit or bot check pauses all lookups
-for one hour, preserves current playback, and retries pending playback after the
-pause. Stop and mode changes cancel pending playback and automatic recovery.
+deduplicate pending videos. A YouTube rate limit or bot check pauses audio
+lookups for one hour, preserves current playback, and retries pending playback
+after the pause. Flat playlist metadata has its own cooldown, so a failed likes
+download cannot prevent browsing playlists. A metadata failure ends the loading
+indicator and retries after its cooldown. Stop and mode changes cancel pending
+playback and automatic recovery.
 Unavailable successors are skipped with at most three attempts per transition.
 
 Select **url** from the mode menu, paste a YouTube live stream or playlist URL,

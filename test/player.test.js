@@ -80,6 +80,53 @@ test('a 302-track playlist enumerates once and performs no audio lookup until pl
     assert.equal(queue.length, 0);
 });
 
+test('an audio cooldown cannot prevent listing a playlist', t => {
+    const { player, scheduler, calls, list } = setup(t);
+    scheduler.blockedUntil = Date.now() + 3600000;
+    scheduler.blockError = Object.assign(new Error('Audio requests paused.'), { code: 'YOUTUBE_BLOCKED' });
+    player.selectPlaylist('rock');
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].args.includes('--flat-playlist'));
+    list();
+    assert.equal(player.streamTracks.length, 302);
+    assert.equal(player.getState().streamLoading, false);
+    assert.equal(player.getState().urlError, '');
+    player.playStreamTrack(301);
+    assert.equal(calls.length, 1, 'audio extraction still observes its cooldown');
+    assert.match(player.getState().urlError, /Audio requests paused/);
+});
+
+test('a blocked listing ends loading and retries metadata after cooldown without autoplay', t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000000 });
+    const { player, scheduler, calls, list } = setup(t);
+    const states = [];
+    player.emitter.on('state-changed', state => states.push(state));
+    player.selectPlaylist('rock');
+    calls[0].finish(new Error('HTTP Error 429'));
+    assert.equal(scheduler.blockedUntil, 0);
+    assert.equal(states.at(-1).streamLoading, false);
+    assert.match(states.at(-1).urlError, /playlist requests paused/);
+    t.mock.timers.tick(3599999);
+    assert.equal(calls.length, 1);
+    t.mock.timers.tick(1);
+    assert.equal(calls.length, 2);
+    assert.ok(calls[1].args.includes('--flat-playlist'));
+    list();
+    assert.equal(player.streamTracks.length, 302);
+    assert.equal(player.getState().urlError, '');
+    assert.equal(calls.length, 2, 'browsing a playlist must not start audio playback');
+});
+
+test('stop cancels automatic recovery of a blocked listing', t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000000 });
+    const { player, calls } = setup(t);
+    player.selectPlaylist('rock');
+    calls[0].finish(new Error('HTTP Error 429'));
+    player.stop();
+    t.mock.timers.tick(3600000);
+    assert.equal(calls.length, 1);
+});
+
 test('play resolves only current + next and MPD transitions without another play command', t => {
     const { player, calls, list, resolve, queue, end, commands } = setup(t);
     player.selectPlaylist('rock'); list();
@@ -470,6 +517,20 @@ test('a restarted controller restores the selection and refills the queue after 
     restored.resolve(2); restored.resolve(0);
     restored.end(); restored.resolve(1);
     assert.deepEqual(restored.queue, ['https://example.com/audio/0', 'https://example.com/audio/1']);
+});
+
+test('restart recovers an empty playlist left by an audio cooldown without autoplay', t => {
+    const original = setup(t);
+    original.scheduler.blockedUntil = Date.now() + 3600000;
+    original.player.selectPlaylist('rock');
+    const restored = setup(t);
+    fs.copyFileSync(original.player.sessionPath, restored.player.sessionPath);
+    restored.player.mpd.emit('ready');
+    assert.equal(restored.calls.length, 1);
+    assert.ok(restored.calls[0].args.includes('--flat-playlist'));
+    restored.list();
+    assert.equal(restored.player.streamTracks.length, 302);
+    assert.equal(restored.calls.length, 1);
 });
 
 test('stopping playback persists the selection without autoplay on restart', t => {
