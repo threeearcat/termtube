@@ -58,9 +58,10 @@ class Player {
         this._savedSession = '';
 
         this.emitter = new EventEmitter();
-        this._streamResolver.queue.on('blocked', error => {
+        this._streamResolver.queue.on('blocked', (error, job) => {
             console.log(error.message);
-            if (!this._streamListLoading) {
+            const selectionQueued = job?.cancelled && this._pendingStreamTrack?.job?.interactive;
+            if (!this._streamListLoading && !selectionQueued) {
                 this.urlError = error.message;
                 this._scheduleStreamRetry();
             }
@@ -211,13 +212,13 @@ class Player {
             if (Number.isFinite(session[until]) && session[until] > Date.now()) {
                 // Old sessions can contain the former one-hour cooldown.
                 queue[until] = Math.min(session[until], Date.now() + queue.cooldown);
-                queue[error] = Object.assign(new Error('YouTube ' + category + 'requests paused briefly after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
+                queue[error] = Object.assign(new Error('Automatic YouTube ' + category + 'requests paused briefly after a rate limit or bot check.'), { code: 'YOUTUBE_BLOCKED' });
             }
         }
         if (!session.tracks.length) {
             // A controller may have exited while listing a playlist or while
             // metadata was blocked. Restore the list even without autoplay.
-            const options = { autoplay: !!session.resume };
+            const options = { autoplay: !!session.resume, interactive: false };
             if (this.mode === 'stream') this._switchToStream(undefined, options);
             else if (this.mode === 'url') this._switchToUrl(options);
             else this._switchToLofi(options);
@@ -233,7 +234,7 @@ class Player {
         this._emitStreamTracks();
         if (session.resume) {
             if (selected) this._requestStreamTrack(selected, !!session.manualSelection);
-            else this.start();
+            else this.start(false);
         } else {
             this._mpdCommand('stop');
         }
@@ -271,10 +272,10 @@ class Player {
         this._retryTimer = setTimeout(() => {
             this._retryTimer = null;
             if (gen !== this._streamGen || !this._isStreaming()) return;
-            if (source) this._loadStream(source, { autoplay });
+            if (source) this._loadStream(source, { autoplay, interactive: false });
             else if (this._pendingStreamTrack) this._requestStreamTrack(this._pendingStreamTrack);
             else if (this._streamPlaying) this._prepareNextStreamTrack();
-            else if (this._streamAutoplay) this.start();
+            else if (this._streamAutoplay) this.start(false);
         }, wait);
         this._retryTimer.unref();
     }
@@ -395,18 +396,18 @@ class Player {
 
     // --- Playback ---
 
-    start() {
+    start(interactive = true) {
         if (this._isStreaming()) {
             if (this.mode === 'url' && !this.currentUrl) return;
             this._streamAutoplay = true;
             if (this._streamListLoading) return;
             if (!this._streamTrackJobs.length) {
-                if (this.mode === 'stream') this._switchToStream(undefined, { autoplay: true });
-                else if (this.mode === 'url') this._switchToUrl({ autoplay: true });
+                if (this.mode === 'stream') this._switchToStream(undefined, { autoplay: true, interactive });
+                else if (this.mode === 'url') this._switchToUrl({ autoplay: true, interactive });
                 return;
             }
             const track = this._pendingStreamTrack || this._activeStreamTrack || this._chooseStreamTrack();
-            if (track) this._requestStreamTrack(track);
+            if (track) this._requestStreamTrack(track, undefined, interactive);
             return;
         }
         if (this._checkState('stop')) this.reload();
@@ -430,7 +431,9 @@ class Player {
     }
 
     startStop() {
-        if (this._streamAutoplay || this._pendingStreamTrack || this._streamPlaying) this.stop();
+        if (this._pendingStreamTrack && this.urlError && !this._pendingStreamTrack.job
+            && (this._checkState('stop') || this._checkState('pause'))) this.start();
+        else if (this._streamAutoplay || this._pendingStreamTrack || this._streamPlaying) this.stop();
         else if (this._checkState('stop') || this._checkState('pause')) this.start();
         else this.stop();
     }
@@ -439,7 +442,7 @@ class Player {
         if (this._isStreaming()) {
             if (this._streamListLoading) { this._streamAutoplay = true; return; }
             const track = this._nextStreamTrack || this._chooseStreamTrack(this._pendingStreamTrack || this._activeStreamTrack);
-            if (track) this._requestStreamTrack(track);
+            if (track) this._requestStreamTrack(track, undefined, true);
             return;
         }
         this._mpdCommand('next');
@@ -540,7 +543,7 @@ class Player {
     _switchToLofi(options = {}) {
         this.mode = 'lofi';
         this._beginStreamLoad(options);
-        this._installStreamTracks(this.lofiURLs.filter(url => url.trim()).map(url => ({ url, title: url, resolveTitle: true })));
+        this._installStreamTracks(this.lofiURLs.filter(url => url.trim()).map(url => ({ url, title: url, resolveTitle: true })), options.interactive !== false);
     }
 
     _switchToStream(playlist, options = {}) {
@@ -605,7 +608,7 @@ class Player {
         const gen = this._beginStreamLoad(options);
         if (!source) return;
         if (this.mode === 'url' && !new URL(source.url).searchParams.get('list')) {
-            this._installStreamTracks([{ url: source.url, title: source.url, resolveTitle: true }]);
+            this._installStreamTracks([{ url: source.url, title: source.url, resolveTitle: true }], options.interactive !== false);
             return;
         }
         this._streamListLoading = true;
@@ -623,16 +626,16 @@ class Player {
             const tracks = [];
             for (let i = 0; i + 1 < lines.length; i += 2) tracks.push({ url: lines[i], title: lines[i + 1] });
             console.log(source.name + ': listed', tracks.length, 'tracks');
-            this._installStreamTracks(tracks);
-        }, 2);
+            this._installStreamTracks(tracks, options.interactive !== false);
+        }, 2, { interactive: options.interactive !== false });
     }
 
-    _installStreamTracks(tracks) {
+    _installStreamTracks(tracks, interactive = false) {
         this._streamTrackJobs = tracks;
         this.urlError = '';
         this._emitStreamTracks();
         if (!tracks.length) { this._reportUrlError(); return; }
-        if (this._streamAutoplay) this.start();
+        if (this._streamAutoplay) this.start(interactive);
     }
 
     _emitStreamTracks() {
@@ -655,7 +658,11 @@ class Player {
         return null;
     }
 
-    _requestStreamTrack(track, manual = this._pendingStreamTrack === track && this._manualStreamSelection) {
+    _requestStreamTrack(track, manual = this._pendingStreamTrack === track && this._manualStreamSelection, interactive = false) {
+        if (interactive) {
+            clearTimeout(this._retryTimer);
+            this._retryTimer = null;
+        }
         if (this._pendingStreamTrack !== track) ++this._playRequest;
         this._pendingStreamTrack = track;
         this._manualStreamSelection = manual;
@@ -672,15 +679,15 @@ class Player {
             }
         }
         if (this._trackUrlIsFresh(track)) this._activateStreamTrack(track);
-        else if (this._streamResolver.queue.getError()) {
+        else if (!interactive && this._streamResolver.queue.getError()) {
             this.urlError = this._streamResolver.queue.getError().message;
             this._scheduleStreamRetry();
-        } else if (!track.job) this._queueStreamTrack(track);
-        this._streamResolver.prioritize(track.job);
+        } else if (!track.job) this._queueStreamTrack(track, interactive);
+        this._streamResolver.prioritize(track.job, interactive);
         this.emitter.emit('state-changed', this.getState());
     }
 
-    _queueStreamTrack(track) {
+    _queueStreamTrack(track, interactive = false) {
         const gen = this._streamGen;
         track.streamUrl = null;
         const args = ['--no-playlist', '-f', 'bestaudio/best'];
@@ -718,10 +725,11 @@ class Player {
             this._emitStreamTracks();
             if (this._pendingStreamTrack === track) this._activateStreamTrack(track);
             else if (this._nextStreamTrack === track) this._addPreparedTrack(track);
-        }, this._pendingStreamTrack === track ? 2 : 0);
+        }, this._pendingStreamTrack === track ? 2 : 0, { interactive });
     }
 
     _activateStreamTrack(track) {
+        this.urlError = '';
         const gen = this._streamGen;
         const request = ++this._playRequest;
         this._streamPlaying = false;
@@ -815,7 +823,7 @@ class Player {
             : this._streamTrackJobs.find(track => track.title === selection);
         if (!track) return;
         this._startFailures = 0;
-        this._requestStreamTrack(track, true);
+        this._requestStreamTrack(track, true, true);
     }
 
     _savePlaylists() {

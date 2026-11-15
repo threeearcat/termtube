@@ -80,8 +80,8 @@ test('a 302-track playlist enumerates once and performs no audio lookup until pl
     assert.equal(queue.length, 0);
 });
 
-test('an audio cooldown cannot prevent listing a playlist', t => {
-    const { player, scheduler, calls, list } = setup(t);
+test('an audio cooldown allows playlist browsing and explicit track selection', t => {
+    const { player, scheduler, calls, list, resolve, queue } = setup(t);
     scheduler.blockedUntil = Date.now() + 3600000;
     scheduler.blockError = Object.assign(new Error('Audio requests paused.'), { code: 'YOUTUBE_BLOCKED' });
     player.selectPlaylist('rock');
@@ -92,8 +92,12 @@ test('an audio cooldown cannot prevent listing a playlist', t => {
     assert.equal(player.getState().streamLoading, false);
     assert.equal(player.getState().urlError, '');
     player.playStreamTrack(301);
-    assert.equal(calls.length, 1, 'audio extraction still observes its cooldown');
-    assert.match(player.getState().urlError, /Audio requests paused/);
+    assert.equal(calls.length, 2, 'a user click bypasses the audio cooldown');
+    assert.equal(calls[1].args.at(-1), 'https://example.com/track/301');
+    resolve(301);
+    assert.equal(queue[0], 'https://example.com/audio/301');
+    assert.equal(calls.length, 2, 'automatic prefetch still observes its cooldown');
+    assert.ok(scheduler.getError());
 });
 
 test('a blocked listing ends loading and retries metadata after cooldown without autoplay', t => {
@@ -233,22 +237,97 @@ test('a failed manual selection reports the failure without substituting another
     assert.equal(commands.filter(c => c.name === 'play').length, plays);
 });
 
-test('selecting during cooldown blocks the prepared successor and preserves manual intent on retry', t => {
+test('selecting during cooldown resolves the selection and prevents substitution on failure', t => {
     t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000000 });
     const { player, scheduler, calls, list, resolve, end } = setup(t);
     player.selectPlaylist('rock'); list(); player.start(); resolve(0); resolve(1);
     scheduler.blockedUntil = Date.now() + 3600000;
     scheduler.blockError = Object.assign(new Error('YouTube requests paused.'), { code: 'YOUTUBE_BLOCKED' });
-    player.playStreamTrack(301);
     const count = calls.length;
+    player.playStreamTrack(301);
+    assert.equal(calls.length, count + 1, 'the selection starts without waiting for cooldown');
+    assert.equal(player.getState().streamLoading, true);
+    assert.equal(player.getState().urlError, '');
     end();
     assert.equal(player._mpdState, 'stop');
-    assert.match(player.getState().urlError, /paused/);
-    t.mock.timers.tick(3600000);
-    assert.equal(calls.length, count + 1);
     assert.equal(calls.at(-1).args.at(-1), 'https://example.com/track/301');
     calls.at(-1).finish(new Error('unavailable'));
-    assert.equal(calls.length, count + 1, 'cooldown retry must not substitute a different selection');
+    t.mock.timers.tick(3600000);
+    assert.equal(calls.length, count + 1, 'a failed explicit selection must not be substituted');
+    assert.match(player.getState().urlError, /Track 301/);
+});
+
+test('Play retries a blocked selection while automatic prefetch keeps its cooldown', t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000000 });
+    const { player, calls, list, resolve, scheduler, queue } = setup(t);
+    player.selectPlaylist('rock'); list(); player.start();
+    calls.at(-1).finish(new Error('HTTP Error 429'));
+    const count = calls.length;
+    player.startStop();
+    assert.equal(calls.length, count + 1);
+    assert.equal(calls.at(-1).args.at(-1), 'https://example.com/track/0');
+    resolve(0);
+    assert.equal(queue[0], 'https://example.com/audio/0');
+    assert.equal(player.getState().urlError, '');
+    assert.ok(scheduler.getError());
+    t.mock.timers.tick(3599999);
+    assert.equal(calls.length, count + 1, 'the explicit request does not release automatic prefetch');
+    t.mock.timers.tick(1);
+    assert.equal(calls.length, count + 2);
+});
+
+test('Next bypasses cooldown after a successor lookup is rate limited', t => {
+    const { player, calls, list, resolve, queue } = setup(t);
+    player.selectPlaylist('rock'); list(); player.start(); resolve(0);
+    calls.at(-1).finish(new Error('HTTP Error 429'));
+    const count = calls.length;
+    player.next();
+    assert.equal(calls.length, count + 1);
+    assert.equal(calls.at(-1).args.at(-1), 'https://example.com/track/1');
+    resolve(1);
+    assert.equal(queue[0], 'https://example.com/audio/1');
+    assert.equal(player.getState().urlError, '');
+    assert.equal(calls.length, count + 1);
+});
+
+test('a cancelled lookup reporting a rate limit cannot discard a later click', t => {
+    const { player, calls, list, resolve, queue } = setup(t);
+    player.selectPlaylist('rock'); list(); player.start(); resolve(0);
+    const prefetch = calls.at(-1);
+    player.playStreamTrack(301);
+    prefetch.finish(new Error('HTTP Error 429'));
+    assert.equal(calls.at(-1).args.at(-1), 'https://example.com/track/301');
+    assert.equal(player.getState().streamLoading, true);
+    assert.equal(player.getState().urlError, '');
+    resolve(301);
+    assert.equal(queue[0], 'https://example.com/audio/301');
+    assert.equal(player.getState().urlError, '');
+});
+
+test('reselecting a playlist bypasses metadata cooldown and cancels the old automatic retry', t => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000000 });
+    const { player, calls, list } = setup(t);
+    player.selectPlaylist('rock');
+    calls[0].finish(new Error('HTTP Error 429'));
+    player.selectPlaylist('other');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].args.at(-1), 'https://example.com/playlist?list=other');
+    list();
+    t.mock.timers.tick(3600000);
+    assert.equal(calls.length, 2);
+    assert.equal(player.currentPlaylist, 'other');
+    assert.equal(player.getState().urlError, '');
+});
+
+test('direct URL playback bypasses audio cooldown', t => {
+    const { player, scheduler, calls, queue } = setup(t);
+    scheduler.blockedUntil = Date.now() + 3600000;
+    scheduler.blockError = Object.assign(new Error('YouTube requests paused.'), { code: 'YOUTUBE_BLOCKED' });
+    player.playUrl('https://www.youtube.com/live/example');
+    assert.equal(calls.length, 1);
+    calls[0].finish(null, 'Radio\nhttps://example.com/audio/live\n');
+    assert.equal(queue[0], 'https://example.com/audio/live');
+    assert.equal(player.getState().urlError, '');
 });
 
 test('rapid selections cancel obsolete lookups and never create concurrent extractors', t => {

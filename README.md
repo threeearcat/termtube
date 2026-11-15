@@ -31,8 +31,11 @@ Playback lookups and likes downloads share one yt-dlp process slot, with ten
 seconds between processes and one second between extraction requests. Playback
 takes priority over background downloads. Likes downloads run one at a time and
 deduplicate pending videos. A YouTube rate limit or bot check pauses the affected
-request category for 30 seconds. Playback, likes downloads, and flat playlist
-metadata have separate cooldowns, so a failed likes download cannot prevent
+request category's automatic requests for 30 seconds. Explicit track selection,
+Play, Next, URL playback, and playlist selection can retry during that pause.
+These requests still share the single process slot and normal process spacing.
+Playback, likes downloads, and flat playlist metadata have separate cooldowns,
+so a failed likes download cannot prevent
 browsing playlists or playing selected tracks. Playback failures preserve current
 audio and retry pending playback after the pause. A metadata failure ends the loading
 indicator and retries after its cooldown. Stop and mode changes cancel pending

@@ -86,6 +86,47 @@ test('cancelled work cannot hide a rate limit from the other owner', t => {
 });
 
 for (const metadata of [false, true]) {
+    test(`explicit ${metadata ? 'playlist' : 'audio'} requests bypass cooldown while retaining process spacing`, async t => {
+        t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 100000 });
+        const { queue, calls, foreground } = setup(t);
+        const args = metadata ? ['--flat-playlist', 'playlist'] : ['-g', 'audio'];
+        foreground.exec(args, () => {});
+        calls[0].finish(new Error('HTTP Error 429'));
+        const failures = [];
+        foreground.exec(args, err => failures.push(err?.code));
+        foreground.exec(args, err => assert.equal(err, null), 2, { interactive: true });
+        await Promise.resolve();
+        assert.deepEqual(failures, ['YOUTUBE_BLOCKED']);
+        t.mock.timers.tick(9999);
+        assert.equal(calls.length, 1);
+        t.mock.timers.tick(1);
+        assert.equal(calls.length, 2, 'the click waits only for normal process spacing');
+        calls[1].finish();
+        assert.ok(queue.getError(metadata), 'automatic requests keep their cooldown');
+        foreground.exec(args, err => failures.push(err?.code));
+        await Promise.resolve();
+        assert.deepEqual(failures, ['YOUTUBE_BLOCKED', 'YOUTUBE_BLOCKED']);
+        assert.equal(calls.length, 2);
+    });
+}
+
+for (const promoted of [false, true]) {
+    test(`a rate limit preserves a queued ${promoted ? 'promoted prefetch' : 'explicit selection'}`, t => {
+        const { foreground, downloads, calls } = setup(t, { interval: 0 });
+        downloads.exec(['-g', 'old'], () => {});
+        const failures = [];
+        foreground.exec(['-g', 'automatic'], err => failures.push(err?.code));
+        const selected = foreground.exec(['-g', 'selected'], err => assert.equal(err, null), 0, { interactive: !promoted });
+        foreground.prioritize(selected, promoted);
+        calls[0].finish(new Error('HTTP Error 429'));
+        assert.deepEqual(failures, ['YOUTUBE_BLOCKED']);
+        assert.equal(calls.length, 2);
+        assert.equal(calls[1].args.at(-1), 'selected');
+        calls[1].finish();
+    });
+}
+
+for (const metadata of [false, true]) {
     test(`${metadata ? 'playlist' : 'audio'} cooldown does not block the other request category`, async t => {
         const { queue, foreground, downloads, calls } = setup(t, { interval: 0 });
         const audioArgs = ['-g', 'audio'];
